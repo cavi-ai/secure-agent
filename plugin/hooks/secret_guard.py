@@ -2028,6 +2028,376 @@ def apply_verdict(verdict: Verdict, command: str, event: str) -> None:
     allow(",".join(verdict.touched), command, event)
 
 
+class SegmentContext(NamedTuple):
+    """One shell segment as a command rule sees it. ``command`` is the whole
+    command line; ``pattern_deadline`` and ``touched`` are shared by every segment."""
+    argv: list
+    raw: str
+    pipeline: tuple
+    name: str
+    command: str
+    pattern_deadline: float
+    touched: list
+
+
+# Returned by a rule to skip the remaining rules for the current segment.
+SKIP_SEGMENT = Verdict("skip-segment")
+
+
+# 1. security(1) — total ban from agent shells.
+def rule_keychain_security_cli(seg: SegmentContext) -> Verdict | None:
+    name = seg.name
+    if name == "security":
+        return denied(
+            "keychain-security-cli",
+            "Blocked: an agent tried to run the macOS `security` tool.",
+            "DENIED: agents have no keychain access, read or write. If you need a "
+            "credential, say what you need and why; propose it to the user instead "
+            "of reaching for the keychain, another client, or a subagent.",
+        )
+
+
+# 1a. Network clients driving the guard's own control socket / HTTP
+#     surface directly — forging /guard/resolve or /guard/decision is
+#     the same class of attack as editing guard-modes.json by hand.
+#     Match the RESOLVED target, not token text: shlex sees "$SOCK"
+#     and "~" unexpanded, so raw substring matching misses both. The
+#     socket also serves read-only status the acceptance gate needs;
+#     a plain GET of an allowlisted status path is sanctioned.
+def rule_guard_control_network(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    if name in NETWORK_CLIENTS:
+        toks = [os.path.expandvars(os.path.expanduser(t)) for t in argv[1:]]
+        url_path = None
+        for t in toks:
+            m = re.match(r"https?://unix(/[^ \t]*)?$", t)
+            if m:
+                url_path = m.group(1) or "/"
+                break
+        sock_real = os.path.realpath(SOCK_PATH)
+        hits_sock = any(
+            not t.startswith("-") and os.path.realpath(t) == sock_real
+            for t in toks
+        )
+        guard_url = any("/guard/" in t for t in toks)
+        if url_path is not None or hits_sock or guard_url:
+            write_verbs = {"-d", "--data", "--data-binary", "--data-raw",
+                           "--data-ascii", "-F", "--form", "--json",
+                           "-T", "--upload-file"}
+            read_only = True
+            for i, t in enumerate(argv[1:]):
+                if t in write_verbs:
+                    read_only = False
+                elif t in ("-X", "--request") and i + 2 <= len(argv) and argv[i + 2].upper() != "GET":
+                    read_only = False
+                elif t.startswith("-X") and len(t) > 2 and t[2:].upper() != "GET":
+                    read_only = False
+            sanctioned = (not guard_url and read_only
+                          and url_path in READONLY_SOCKET_PATHS)
+            if not sanctioned:
+                return denied(
+                    "guard-control-network",
+                    "Blocked: an agent tried to drive the guard's own control socket.",
+                    "DENIED: writing to the daemon's control socket (curl/nc/wget/etc "
+                    "against daemon.sock or /guard/*) is how an agent would forge its "
+                    "own allow decision. Read-only status (GET /status, /resources) is "
+                    "permitted; everything else goes through the tool calls the guard "
+                    "already mediates.",
+                )
+
+
+# 1b. Executors whose dangerous target arrives outside their own argv:
+#     `echo ~/.zshrc | xargs rm` (target via stdin), `find ~/.ssh
+#     -exec cat {} +`, `tar cf - ~/.aws`. argv alone looks harmless, so
+#     check the WHOLE command line for protected references.
+def rule_executor_bypass_xargs(seg: SegmentContext) -> Verdict | None:
+    argv, name, command = seg.argv, seg.name, seg.command
+    if name == "xargs":
+        subcmds = [t for t in argv[1:] if not t.startswith("-")]
+        if any(os.path.basename(t) in MUTATORS | READERS for t in subcmds):
+            if command_references_protected(command):
+                return denied(
+                    "executor-bypass",
+                    "Blocked: an agent piped a protected path into xargs.",
+                    "DENIED: `xargs` with a mutator/reader fed from a protected path "
+                    "is the same action as running that command on the path directly. "
+                    "Ask the user to run it themselves.",
+                )
+
+
+def rule_executor_bypass_find(seg: SegmentContext) -> Verdict | None:
+    argv, name, command = seg.argv, seg.name, seg.command
+    if name == "find" and any(f in argv for f in ("-exec", "-ok", "-delete", "-execdir")):
+        if command_references_protected(command):
+            return denied(
+                "executor-bypass",
+                "Blocked: an agent used find -exec/-delete against a protected path.",
+                "DENIED: `find` with -exec/-delete over a protected directory reads or "
+                "mutates everything beneath it without any single-file check. Ask the "
+                "user to run it themselves.",
+            )
+
+
+def rule_secret_archive(seg: SegmentContext) -> Verdict | None:
+    name, command = seg.name, seg.command
+    if name in ARCHIVERS and command_references_protected(command):
+        return denied(
+            "secret-archive",
+            "Blocked: an agent tried to archive a protected directory.",
+            "DENIED: archiving/copying a protected directory (ssh keys, cloud creds, "
+            "keychain) is bulk exfiltration, whatever the stated purpose.",
+        )
+
+
+# 1c. Stopping the product's own processes: kill/pkill/killall (also
+#     via xargs), osascript quit, launchctl bootout/stop/unload/etc.
+def rule_guard_control_stop(seg: SegmentContext) -> Verdict | None:
+    argv, raw, pipeline, pattern_deadline = seg.argv, seg.raw, seg.pipeline, seg.pattern_deadline
+    if stops_product(argv, raw, pipeline, pattern_deadline):
+        return denied(
+            "guard-control-stop",
+            "Blocked: an agent tried to stop Secure Agent.",
+            "DENIED: killing, quitting or unloading Secure Agent's own processes "
+            "(secure-agentd, secure-agent-esd, the menu bar app) is how an agent "
+            "would turn off the guard that is watching it; every hook allows once "
+            "the app is gone. Ask the user to quit the app themselves.",
+        )
+
+
+# 2. Anything pointed at the keychain files.
+def rule_keychain_file_op(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    if name in MUTATORS or name in READERS:
+        for tok in argv[1:]:
+            if is_keychain_path(tok):
+                return denied(
+                    "keychain-file-op",
+                    "Blocked: an agent tried to touch a keychain file directly.",
+                    "DENIED: keychain files are off limits — copying, moving, "
+                    "chmod/chflags, deleting or reading them. This is the exact class of "
+                    "action that can corrupt or lock a user out of their keyring.",
+                )
+
+
+# 3. Shell rc mutation (reads stay allowed).
+#    chflags is asymmetric: setting the immutable flag only hardens the
+#    file, so it is allowed; clearing it is the first move of anyone
+#    about to edit the file, so it is denied. The flag match is against
+#    a known unset-flags set — the old `startswith("no")` heuristic both
+#    missed `-R ~` recursion and false-denied hardening flags like
+#    `nodump`.
+def rule_shell_rc_unlock(seg: SegmentContext) -> Verdict | None:
+    argv, name, touched = seg.argv, seg.name, seg.touched
+    CHFLAGS_UNSET = ("nouchg", "noschg")
+    targets_rc = any(is_shell_rc(t) for t in argv[1:])
+    recursive_home = any(a.startswith("-") and "R" in a for a in argv[1:]) and any(
+        norm(t) == HOME for t in argv[1:] if not t.startswith("-")
+    )
+    if name == "chflags" and (targets_rc or (recursive_home and any(
+            a.lower().lstrip("-") in CHFLAGS_UNSET for a in argv[1:]))):
+        unlocking = any(
+            a.lower().lstrip("-") in CHFLAGS_UNSET
+            for a in argv[1:]
+            if not a.startswith("/") and "~" not in a
+        )
+        if not unlocking:
+            touched.append("shell-rc-lock")
+            return SKIP_SEGMENT
+        return denied(
+            "shell-rc-unlock",
+            f"Blocked: an agent tried to clear the immutable flag on a shell rc file.",
+            "DENIED: clearing uchg/schg on shell config is how an agent gets write access "
+            "to it. Setting the flag is allowed; removing it is the user's call alone.",
+        )
+
+
+def rule_protected_mutation(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    if name in MUTATORS:
+        for tok in argv[1:]:
+            if is_shell_rc(tok):
+                return denied(
+                    "shell-rc-mutation",
+                    f"Blocked: an agent tried to modify {norm(tok)}.",
+                    "DENIED: shell config is read-only to agents. `.zshenv` derives every "
+                    "root and PATH for the whole shell; a silent edit there can break every "
+                    "session at once. Read it, propose the diff to the user, let them apply it.",
+                )
+            if is_guard_control_path(tok):
+                return denied(
+                    "guard-control-mutation",
+                    f"Blocked: an agent tried to modify {norm(tok)}.",
+                    "DENIED: the guard's own config and socket directory "
+                    "(~/.config/secure-agent/) is not agent-writable. Editing "
+                    "guard-modes.json or touching daemon.sock is how an agent would "
+                    "disable the guard that is watching it.",
+                )
+            if is_harness_config_path(tok):
+                return denied(
+                    "harness-config-mutation",
+                    f"Blocked: an agent tried to modify {norm(tok)}.",
+                    "DENIED: harness settings and hook scripts are the guard's "
+                    "enforcement plane — modifying them is how an agent removes or "
+                    "neuters the guard watching it. Propose the change to the user.",
+                )
+
+
+# 4. Redirects into rc files, keychain paths, or the guard's own
+#    control plane, whatever the command is.
+def rule_protected_redirect(seg: SegmentContext) -> Verdict | None:
+    raw = seg.raw
+    for m in REDIRECT_RE.finditer(raw):
+        tgt = m.group(1)
+        if is_shell_rc(tgt):
+            return denied(
+                "shell-rc-redirect",
+                f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                "DENIED: shell config is read-only to agents. Propose the diff to the user.",
+            )
+        if is_keychain_path(tgt):
+            return denied(
+                "keychain-redirect",
+                "Blocked: an agent tried to redirect output into a keychain path.",
+                "DENIED: keychain files are off limits.",
+            )
+        if is_guard_control_path(tgt):
+            return denied(
+                "guard-control-redirect",
+                f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                "DENIED: the guard's own config and socket directory is not "
+                "agent-writable — this is how an agent would disable the guard "
+                "that is watching it.",
+            )
+        if is_harness_config_path(tgt):
+            return denied(
+                "harness-config-redirect",
+                f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                "DENIED: harness settings and hook scripts are the guard's "
+                "enforcement plane — this is how an agent would disable the "
+                "guard that is watching it.",
+            )
+
+
+# 5. Inline interpreter code is the obvious way around an argv check:
+#    `python3 -c "open('~/.zshrc','a').write(...)"` has argv[0] == python3
+#    and the path buried in a string. Scan inline source for a protected
+#    path paired with a write verb. Reading stays allowed.
+#    A write verb paired with runtime path *composition* (chr(), base64,
+#    env lookups) is denied too — that pattern exists to defeat exactly
+#    this literal-substring scan, so its absence proves nothing.
+def rule_interpreter_write(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    if name in INTERPRETERS:
+        for tok in argv[1:]:
+            if not WRITE_VERB_RE.search(tok):
+                continue
+            # the path is usually inside the -c payload, not its own arg
+            # case-folded: KEYCHAIN_MARKERS are lowercase but the real
+            # path is `~/Library/Keychains`, so a literal compare misses it
+            low = tok.lower()
+            names_protected = (
+                is_shell_rc(tok) or is_keychain_path(tok) or is_secret_file(tok)
+                or any(
+                    marker.lower() in low
+                    for marker in list(SHELL_RC_NAMES) + list(KEYCHAIN_MARKERS) + ["credentials/"]
+                )
+            )
+            if names_protected:
+                return denied(
+                    "interpreter-write-bypass",
+                    "Blocked: an agent tried to write protected config through an interpreter.",
+                    "DENIED: routing a write to shell config, the keychain or a credential "
+                    "file through python/perl/node does not make it allowed. Propose the "
+                    "diff to the user.",
+                )
+            if OBFUSCATION_RE.search(tok):
+                return denied(
+                    "interpreter-obfuscated-write",
+                    "Blocked: an agent hid a file write behind runtime path composition.",
+                    "DENIED: this inline code combines a file write with dynamic string "
+                    "construction (chr/base64/env lookups) — the signature of hiding the "
+                    "target path from static inspection. Write it as a plain script with "
+                    "literal paths, or ask the user to run it.",
+                )
+
+
+# 6. Printing raw credential files / private keys.
+def rule_secret_file_read(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    if name in READERS:
+        for tok in argv[1:]:
+            if is_secret_file(tok):
+                return denied(
+                    "secret-file-read",
+                    "Blocked: an agent tried to print a credential file.",
+                    "DENIED: credential files reach a process through `source`, never "
+                    "through stdout. Printing one puts the secret in a transcript. "
+                    "Ask the user for the value you actually need instead.",
+                )
+
+
+# 6a. Directory Guard modes apply to Bash reads/mutations too, not
+#     just file tools — `cat ~/.aws/credentials` must not skip the
+#     same policy a Read tool call would hit (match_rule runs only
+#     for file tools otherwise). The hard secret-file-read deny above
+#     always wins for key material; this is the general case.
+#     Bounded rule: Bash never gets the interactive prompt the
+#     file-tool path uses — it can touch many paths at once, and a
+#     printed secret is unrecoverable — so a prompt-mode path here
+#     resolves straight to deny, never an ask.
+def rule_directory_guard(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    if name in READERS or name in MUTATORS:
+        for tok in argv[1:]:
+            rule_id, mode = match_rule(tok)
+            if not rule_id:
+                # A directory target (cp -r ~/.ssh, tar cf - ~/.aws) is a
+                # scan of every protected file inside it — same gate as
+                # the Grep/Glob tool path.
+                scan_rid = match_dir_scan(tok)
+                if scan_rid:
+                    rule_id, mode = scan_rid, mode_for_dir_scan(scan_rid)
+            if mode in ("deny", "prompt"):
+                return denied(
+                    "guard-deny:" + rule_id,
+                    f"Blocked: access to {norm(tok)} is denied by Directory Guard ({rule_id}).",
+                    f"DENIED by Directory Guard ({rule_id}). Propose the change to the "
+                    "user, or ask them to add an allow rule, then retry.",
+                )
+
+
+# 7. Permitted traffic that still went near a guarded surface.
+def rule_record_touched(seg: SegmentContext) -> Verdict | None:
+    argv, touched = seg.argv, seg.touched
+    for tok in argv[1:]:
+        if is_shell_rc(tok):
+            touched.append("shell-rc-read")
+        elif is_keychain_path(tok):
+            touched.append("keychain-read")
+        elif is_secret_file(tok):
+            touched.append("secret-file-touch")
+
+
+# Per-segment rules in evaluation order. The first deny verdict decides the
+# command; SKIP_SEGMENT moves on to the next segment.
+COMMAND_RULES = (
+    rule_keychain_security_cli,
+    rule_guard_control_network,
+    rule_executor_bypass_xargs,
+    rule_executor_bypass_find,
+    rule_secret_archive,
+    rule_guard_control_stop,
+    rule_keychain_file_op,
+    rule_shell_rc_unlock,
+    rule_protected_mutation,
+    rule_protected_redirect,
+    rule_interpreter_write,
+    rule_secret_file_read,
+    rule_directory_guard,
+    rule_record_touched,
+)
+
+
 def evaluate_command(command: str) -> Verdict:
     """Decide a shell command: the first matching rule denies, otherwise allow
     carrying the guarded surfaces it touched."""
@@ -2035,296 +2405,13 @@ def evaluate_command(command: str) -> Verdict:
     pattern_deadline = time.monotonic() + PATTERN_BUDGET_S
     for argv, raw, pipeline in _segments_with_pipeline(command):
         name = cmd_name(argv)
-
-        # 1. security(1) — total ban from agent shells.
-        if name == "security":
-            return denied(
-                "keychain-security-cli",
-                "Blocked: an agent tried to run the macOS `security` tool.",
-                "DENIED: agents have no keychain access, read or write. If you need a "
-                "credential, say what you need and why; propose it to the user instead "
-                "of reaching for the keychain, another client, or a subagent.",
-            )
-
-        # 1a. Network clients driving the guard's own control socket / HTTP
-        #     surface directly — forging /guard/resolve or /guard/decision is
-        #     the same class of attack as editing guard-modes.json by hand.
-        #     Match the RESOLVED target, not token text: shlex sees "$SOCK"
-        #     and "~" unexpanded, so raw substring matching misses both. The
-        #     socket also serves read-only status the acceptance gate needs;
-        #     a plain GET of an allowlisted status path is sanctioned.
-        if name in NETWORK_CLIENTS:
-            toks = [os.path.expandvars(os.path.expanduser(t)) for t in argv[1:]]
-            url_path = None
-            for t in toks:
-                m = re.match(r"https?://unix(/[^ \t]*)?$", t)
-                if m:
-                    url_path = m.group(1) or "/"
-                    break
-            sock_real = os.path.realpath(SOCK_PATH)
-            hits_sock = any(
-                not t.startswith("-") and os.path.realpath(t) == sock_real
-                for t in toks
-            )
-            guard_url = any("/guard/" in t for t in toks)
-            if url_path is not None or hits_sock or guard_url:
-                write_verbs = {"-d", "--data", "--data-binary", "--data-raw",
-                               "--data-ascii", "-F", "--form", "--json",
-                               "-T", "--upload-file"}
-                read_only = True
-                for i, t in enumerate(argv[1:]):
-                    if t in write_verbs:
-                        read_only = False
-                    elif t in ("-X", "--request") and i + 2 <= len(argv) and argv[i + 2].upper() != "GET":
-                        read_only = False
-                    elif t.startswith("-X") and len(t) > 2 and t[2:].upper() != "GET":
-                        read_only = False
-                sanctioned = (not guard_url and read_only
-                              and url_path in READONLY_SOCKET_PATHS)
-                if not sanctioned:
-                    return denied(
-                        "guard-control-network",
-                        "Blocked: an agent tried to drive the guard's own control socket.",
-                        "DENIED: writing to the daemon's control socket (curl/nc/wget/etc "
-                        "against daemon.sock or /guard/*) is how an agent would forge its "
-                        "own allow decision. Read-only status (GET /status, /resources) is "
-                        "permitted; everything else goes through the tool calls the guard "
-                        "already mediates.",
-                    )
-
-        # 1b. Executors whose dangerous target arrives outside their own argv:
-        #     `echo ~/.zshrc | xargs rm` (target via stdin), `find ~/.ssh
-        #     -exec cat {} +`, `tar cf - ~/.aws`. argv alone looks harmless, so
-        #     check the WHOLE command line for protected references.
-        if name == "xargs":
-            subcmds = [t for t in argv[1:] if not t.startswith("-")]
-            if any(os.path.basename(t) in MUTATORS | READERS for t in subcmds):
-                if command_references_protected(command):
-                    return denied(
-                        "executor-bypass",
-                        "Blocked: an agent piped a protected path into xargs.",
-                        "DENIED: `xargs` with a mutator/reader fed from a protected path "
-                        "is the same action as running that command on the path directly. "
-                        "Ask the user to run it themselves.",
-                    )
-        if name == "find" and any(f in argv for f in ("-exec", "-ok", "-delete", "-execdir")):
-            if command_references_protected(command):
-                return denied(
-                    "executor-bypass",
-                    "Blocked: an agent used find -exec/-delete against a protected path.",
-                    "DENIED: `find` with -exec/-delete over a protected directory reads or "
-                    "mutates everything beneath it without any single-file check. Ask the "
-                    "user to run it themselves.",
-                )
-        if name in ARCHIVERS and command_references_protected(command):
-            return denied(
-                "secret-archive",
-                "Blocked: an agent tried to archive a protected directory.",
-                "DENIED: archiving/copying a protected directory (ssh keys, cloud creds, "
-                "keychain) is bulk exfiltration, whatever the stated purpose.",
-            )
-
-        # 1c. Stopping the product's own processes: kill/pkill/killall (also
-        #     via xargs), osascript quit, launchctl bootout/stop/unload/etc.
-        if stops_product(argv, raw, pipeline, pattern_deadline):
-            return denied(
-                "guard-control-stop",
-                "Blocked: an agent tried to stop Secure Agent.",
-                "DENIED: killing, quitting or unloading Secure Agent's own processes "
-                "(secure-agentd, secure-agent-esd, the menu bar app) is how an agent "
-                "would turn off the guard that is watching it; every hook allows once "
-                "the app is gone. Ask the user to quit the app themselves.",
-            )
-
-        # 2. Anything pointed at the keychain files.
-        if name in MUTATORS or name in READERS:
-            for tok in argv[1:]:
-                if is_keychain_path(tok):
-                    return denied(
-                        "keychain-file-op",
-                        "Blocked: an agent tried to touch a keychain file directly.",
-                        "DENIED: keychain files are off limits — copying, moving, "
-                        "chmod/chflags, deleting or reading them. This is the exact class of "
-                        "action that can corrupt or lock a user out of their keyring.",
-                    )
-
-        # 3. Shell rc mutation (reads stay allowed).
-        #    chflags is asymmetric: setting the immutable flag only hardens the
-        #    file, so it is allowed; clearing it is the first move of anyone
-        #    about to edit the file, so it is denied. The flag match is against
-        #    a known unset-flags set — the old `startswith("no")` heuristic both
-        #    missed `-R ~` recursion and false-denied hardening flags like
-        #    `nodump`.
-        CHFLAGS_UNSET = ("nouchg", "noschg")
-        targets_rc = any(is_shell_rc(t) for t in argv[1:])
-        recursive_home = any(a.startswith("-") and "R" in a for a in argv[1:]) and any(
-            norm(t) == HOME for t in argv[1:] if not t.startswith("-")
-        )
-        if name == "chflags" and (targets_rc or (recursive_home and any(
-                a.lower().lstrip("-") in CHFLAGS_UNSET for a in argv[1:]))):
-            unlocking = any(
-                a.lower().lstrip("-") in CHFLAGS_UNSET
-                for a in argv[1:]
-                if not a.startswith("/") and "~" not in a
-            )
-            if not unlocking:
-                touched.append("shell-rc-lock")
-                continue
-            return denied(
-                "shell-rc-unlock",
-                f"Blocked: an agent tried to clear the immutable flag on a shell rc file.",
-                "DENIED: clearing uchg/schg on shell config is how an agent gets write access "
-                "to it. Setting the flag is allowed; removing it is the user's call alone.",
-            )
-
-        if name in MUTATORS:
-            for tok in argv[1:]:
-                if is_shell_rc(tok):
-                    return denied(
-                        "shell-rc-mutation",
-                        f"Blocked: an agent tried to modify {norm(tok)}.",
-                        "DENIED: shell config is read-only to agents. `.zshenv` derives every "
-                        "root and PATH for the whole shell; a silent edit there can break every "
-                        "session at once. Read it, propose the diff to the user, let them apply it.",
-                    )
-                if is_guard_control_path(tok):
-                    return denied(
-                        "guard-control-mutation",
-                        f"Blocked: an agent tried to modify {norm(tok)}.",
-                        "DENIED: the guard's own config and socket directory "
-                        "(~/.config/secure-agent/) is not agent-writable. Editing "
-                        "guard-modes.json or touching daemon.sock is how an agent would "
-                        "disable the guard that is watching it.",
-                    )
-                if is_harness_config_path(tok):
-                    return denied(
-                        "harness-config-mutation",
-                        f"Blocked: an agent tried to modify {norm(tok)}.",
-                        "DENIED: harness settings and hook scripts are the guard's "
-                        "enforcement plane — modifying them is how an agent removes or "
-                        "neuters the guard watching it. Propose the change to the user.",
-                    )
-
-        # 4. Redirects into rc files, keychain paths, or the guard's own
-        #    control plane, whatever the command is.
-        for m in REDIRECT_RE.finditer(raw):
-            tgt = m.group(1)
-            if is_shell_rc(tgt):
-                return denied(
-                    "shell-rc-redirect",
-                    f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
-                    "DENIED: shell config is read-only to agents. Propose the diff to the user.",
-                )
-            if is_keychain_path(tgt):
-                return denied(
-                    "keychain-redirect",
-                    "Blocked: an agent tried to redirect output into a keychain path.",
-                    "DENIED: keychain files are off limits.",
-                )
-            if is_guard_control_path(tgt):
-                return denied(
-                    "guard-control-redirect",
-                    f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
-                    "DENIED: the guard's own config and socket directory is not "
-                    "agent-writable — this is how an agent would disable the guard "
-                    "that is watching it.",
-                )
-            if is_harness_config_path(tgt):
-                return denied(
-                    "harness-config-redirect",
-                    f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
-                    "DENIED: harness settings and hook scripts are the guard's "
-                    "enforcement plane — this is how an agent would disable the "
-                    "guard that is watching it.",
-                )
-
-        # 5. Inline interpreter code is the obvious way around an argv check:
-        #    `python3 -c "open('~/.zshrc','a').write(...)"` has argv[0] == python3
-        #    and the path buried in a string. Scan inline source for a protected
-        #    path paired with a write verb. Reading stays allowed.
-        #    A write verb paired with runtime path *composition* (chr(), base64,
-        #    env lookups) is denied too — that pattern exists to defeat exactly
-        #    this literal-substring scan, so its absence proves nothing.
-        if name in INTERPRETERS:
-            for tok in argv[1:]:
-                if not WRITE_VERB_RE.search(tok):
-                    continue
-                # the path is usually inside the -c payload, not its own arg
-                # case-folded: KEYCHAIN_MARKERS are lowercase but the real
-                # path is `~/Library/Keychains`, so a literal compare misses it
-                low = tok.lower()
-                names_protected = (
-                    is_shell_rc(tok) or is_keychain_path(tok) or is_secret_file(tok)
-                    or any(
-                        marker.lower() in low
-                        for marker in list(SHELL_RC_NAMES) + list(KEYCHAIN_MARKERS) + ["credentials/"]
-                    )
-                )
-                if names_protected:
-                    return denied(
-                        "interpreter-write-bypass",
-                        "Blocked: an agent tried to write protected config through an interpreter.",
-                        "DENIED: routing a write to shell config, the keychain or a credential "
-                        "file through python/perl/node does not make it allowed. Propose the "
-                        "diff to the user.",
-                    )
-                if OBFUSCATION_RE.search(tok):
-                    return denied(
-                        "interpreter-obfuscated-write",
-                        "Blocked: an agent hid a file write behind runtime path composition.",
-                        "DENIED: this inline code combines a file write with dynamic string "
-                        "construction (chr/base64/env lookups) — the signature of hiding the "
-                        "target path from static inspection. Write it as a plain script with "
-                        "literal paths, or ask the user to run it.",
-                    )
-
-        # 6. Printing raw credential files / private keys.
-        if name in READERS:
-            for tok in argv[1:]:
-                if is_secret_file(tok):
-                    return denied(
-                        "secret-file-read",
-                        "Blocked: an agent tried to print a credential file.",
-                        "DENIED: credential files reach a process through `source`, never "
-                        "through stdout. Printing one puts the secret in a transcript. "
-                        "Ask the user for the value you actually need instead.",
-                    )
-
-        # 6a. Directory Guard modes apply to Bash reads/mutations too, not
-        #     just file tools — `cat ~/.aws/credentials` must not skip the
-        #     same policy a Read tool call would hit (match_rule runs only
-        #     for file tools otherwise). The hard secret-file-read deny above
-        #     always wins for key material; this is the general case.
-        #     Bounded rule: Bash never gets the interactive prompt the
-        #     file-tool path uses — it can touch many paths at once, and a
-        #     printed secret is unrecoverable — so a prompt-mode path here
-        #     resolves straight to deny, never an ask.
-        if name in READERS or name in MUTATORS:
-            for tok in argv[1:]:
-                rule_id, mode = match_rule(tok)
-                if not rule_id:
-                    # A directory target (cp -r ~/.ssh, tar cf - ~/.aws) is a
-                    # scan of every protected file inside it — same gate as
-                    # the Grep/Glob tool path.
-                    scan_rid = match_dir_scan(tok)
-                    if scan_rid:
-                        rule_id, mode = scan_rid, mode_for_dir_scan(scan_rid)
-                if mode in ("deny", "prompt"):
-                    return denied(
-                        "guard-deny:" + rule_id,
-                        f"Blocked: access to {norm(tok)} is denied by Directory Guard ({rule_id}).",
-                        f"DENIED by Directory Guard ({rule_id}). Propose the change to the "
-                        "user, or ask them to add an allow rule, then retry.",
-                    )
-
-        # 7. Permitted traffic that still went near a guarded surface.
-        for tok in argv[1:]:
-            if is_shell_rc(tok):
-                touched.append("shell-rc-read")
-            elif is_keychain_path(tok):
-                touched.append("keychain-read")
-            elif is_secret_file(tok):
-                touched.append("secret-file-touch")
+        seg = SegmentContext(argv, raw, pipeline, name, command, pattern_deadline, touched)
+        for rule in COMMAND_RULES:
+            verdict = rule(seg)
+            if verdict is SKIP_SEGMENT:
+                break
+            if verdict is not None:
+                return verdict
 
     return Verdict("allow", touched=tuple(sorted(set(touched))))
 
