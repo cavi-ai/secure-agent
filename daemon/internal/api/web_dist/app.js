@@ -108,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
     detailDrawer.setMode('attention');
     detailDrawer.setCopyVisible(false);
     detailDrawer.open({ title: item.title || view.word, icon: 'shield', attentionOrigin: origin,
-      body: `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`,
+      body: html`<div class="panel-body attention-inspector"><p class="finding-why">${view.agent}</p><h3>${view.what}</h3><p>${view.why}</p>${raw(view.body ? view.body() : html`<p>${item.detail || ''}</p>`)}</div>`,
       foot: actionBarHTML(view.items), onClose: () => { detailDrawer.setMode(null); } });
     drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
     renderAttention();
@@ -132,7 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ? JSON.stringify(Object.entries(control.dataset).sort(([a], [b]) => a.localeCompare(b))) : null;
     const choice = identity(focused);
     drawerTitle.textContent = item.title || view.word;
-    drawerBody.innerHTML = `<div class="panel-body attention-inspector"><p class="finding-why">${escapeHTML(view.agent)}</p><h3>${escapeHTML(view.what)}</h3><p>${escapeHTML(view.why)}</p>${view.body ? view.body() : `<p>${escapeHTML(item.detail || '')}</p>`}</div>`;
+    drawerBody.innerHTML = html`<div class="panel-body attention-inspector"><p class="finding-why">${view.agent}</p><h3>${view.what}</h3><p>${view.why}</p>${raw(view.body ? view.body() : html`<p>${item.detail || ''}</p>`)}</div>`;
     drawerBody.querySelectorAll('details.body-evidence').forEach(part => { part.open = true; });
     drawerFoot.innerHTML = actionBarHTML(view.items);
     drawerFoot.hidden = !view.items.length;
@@ -863,10 +863,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!list) return;
     const views = loadViews();
     list.innerHTML = views.length
-      ? views.map(v => `<div class="view-row">
-          <button class="view-load" data-action="apply-view" data-name="${escapeHTML(v.name)}" title="Apply ${escapeHTML(v.name)}">${escapeHTML(v.name)}</button>
-          <span class="view-tab">${escapeHTML(v.tab || 'overview')}</span>
-          <button class="source-remove" data-action="remove-view" data-name="${escapeHTML(v.name)}" title="Delete view"><svg class="icon"><use href="#i-close"/></svg></button>
+      ? views.map(v => html`<div class="view-row">
+          <button class="view-load" data-action="apply-view" data-name="${v.name}" title="Apply ${v.name}">${v.name}</button>
+          <span class="view-tab">${v.tab || 'overview'}</span>
+          <button class="source-remove" data-action="remove-view" data-name="${v.name}" title="Delete view"><svg class="icon"><use href="#i-close"/></svg></button>
         </div>`).join('')
       : '<div class="notify-scope-empty">No saved views yet</div>';
   }
@@ -1150,8 +1150,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const repair=kind==='repair', evidence=kind==='evidence' || repair;
     const scope = {session:data.session || '',harness:data.harness || '',event:data.event || '',event_scope:repair?'exact':data.event_scope || 'group',handler:data.handler || '',config:data.config || '',script:data.script || '',id:data.id || '',
       ...(repair?{after:data.after || '',problem:data.problem || '',explanation:data.explanation || '',guidance:data.guidance || ''}:{})};
-    const attrs = `data-action="${repair ? 'hook-repair-check' : evidence ? 'hook-evidence' : 'hook-delivery-inspect'}" ` + Object.entries(scope).map(([k,v]) => `data-${k}="${escapeHTML(v)}"`).join(' ');
-    const retry = `<button type="button" class="btn btn-ghost btn-sm" ${attrs}>${repair?'Check again':'Refresh '+(evidence?'evidence':'delivery')}</button>`;
+    const attrs = html`data-action="${repair ? 'hook-repair-check' : evidence ? 'hook-evidence' : 'hook-delivery-inspect'}" ` + Object.entries(scope).map(([k,v]) => html`data-${k}="${v}"`).join(' ');
+    const retry = html`<button type="button" class="btn btn-ghost btn-sm" ${raw(attrs)}>${repair?'Check again':'Refresh '+(evidence?'evidence':'delivery')}</button>`;
     detailDrawer.setMode('hook-' + kind);
     detailDrawer.setCopyVisible(false);
     const copy = '<button type="button" class="btn btn-ghost btn-sm" data-action="hook-diagnostic-copy" disabled>Copy diagnostic summary</button>';
@@ -1172,7 +1172,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const row=payload.hook_ingestion?.forwarders?.find(r=>r.report?.forwarder_id===scope.id);
         if (row && !validHookForwarder(row)) throw new Error('Invalid delivery evidence');
         drawerBody.innerHTML=(row ? hookForwardersHTML([row],false) : '<p>No report for this forwarding instance is available. Current delivery state and recovery are unknown.</p>')
-          +`<button type="button" class="link-btn" data-action="hook-setup" data-harness="${escapeHTML(row?.report.harness || '')}">Hook setup and verification</button>`;
+          +html`<button type="button" class="link-btn" data-action="hook-setup" data-harness="${row?.report.harness || ''}">Hook setup and verification</button>`;
       }
       const summary = hookDiagnosticSummary(kind, scope, payload);
       if (summary) {
@@ -1785,7 +1785,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const s = (agentState.skills || []).find(x => x.id === id);
       if (!s) return;
       detailDrawer.open({ title: s.title, icon: 'doc',
-        body: `<div class="panel-body"><p>${escapeHTML(s.summary)}</p><pre class="agent-skill-body">${escapeHTML(s.body)}</pre></div>` });
+        body: html`<div class="panel-body"><p>${s.summary}</p><pre class="agent-skill-body">${s.body}</pre></div>` });
     } catch (err) {
       showToast("Couldn't load the skill: " + (err.message || err), 'danger');
     }
@@ -2859,7 +2859,7 @@ document.addEventListener('DOMContentLoaded', () => {
       paintPlanSlots(subject, resp);
       if (resp.status === 'pending') pollPlan(subject);
     } catch (err) {
-      planSlots(subject).forEach(el => { el.innerHTML = `<p class="plan-status">No playbook: ${escapeHTML(err.message || err)}</p>`; });
+      planSlots(subject).forEach(el => { el.innerHTML = html`<p class="plan-status">No playbook: ${err.message || err}</p>`; });
     }
   }
   window.askAdvisorPlan = async function(subject) {
@@ -3360,31 +3360,31 @@ document.addEventListener('DOMContentLoaded', () => {
 	const step = (action) => (policy.interventions || []).find(item => item.action === action);
 	const intervention = (action, label, defaultAfter, extra = '') => {
 	  const current = step(action);
-	  return `<label class="resource-policy-step"><input type="checkbox" data-step-enabled data-step-action="${action}"${current ? ' checked' : ''}><span>${label}</span><input class="input" type="number" min="0" step="1" data-step-after value="${Number(current?.after_seconds ?? defaultAfter)}" aria-label="${label} delay in seconds">${extra}</label>`;
+	  return html`<label class="resource-policy-step"><input type="checkbox" data-step-enabled data-step-action="${action}"${current ? ' checked' : ''}><span>${label}</span><input class="input" type="number" min="0" step="1" data-step-after value="${Number(current?.after_seconds ?? defaultAfter)}" aria-label="${label} delay in seconds">${raw(extra)}</label>`;
 	};
-    return `<div class="resource-policy-editor-row${isDefault ? ' default' : ''}" data-policy-row data-policy-index="${index}" data-policy-default="${isDefault ? 'true' : 'false'}">
-      ${isDefault ? '' : `<label class="resource-policy-field resource-policy-path">Workspace path<input class="input" data-policy-field="cwd_prefix" value="${escapeHTML(policy.cwd_prefix || '')}" placeholder="Absolute project path" spellcheck="false"></label>`}
+    return html`<div class="resource-policy-editor-row${isDefault ? ' default' : ''}" data-policy-row data-policy-index="${index}" data-policy-default="${isDefault ? 'true' : 'false'}">
+      ${isDefault ? '' : raw(html`<label class="resource-policy-field resource-policy-path">Workspace path<input class="input" data-policy-field="cwd_prefix" value="${policy.cwd_prefix || ''}" placeholder="Absolute project path" spellcheck="false"></label>`)}
       <label class="resource-policy-field">Action<select class="select" data-policy-field="mode"><option value="observe"${selected('observe')}>Observe</option><option value="prompt"${selected('prompt')}>Ask first</option><option value="terminate"${selected('terminate')}>Terminate</option></select></label>
       <label class="resource-policy-field">Memory (MiB)<input class="input" type="number" min="0" step="1" data-policy-field="max_rss_mb" value="${Number(policy.max_rss_mb || 0)}"></label>
       <label class="resource-policy-field">CPU (%)<input class="input" type="number" min="0" step="1" data-policy-field="max_cpu_percent" value="${Number(policy.max_cpu_percent || 0)}"></label>
       <label class="resource-policy-field">Grace (sec)<input class="input" type="number" min="0" step="1" data-policy-field="sustain_seconds" value="${Number(policy.sustain_seconds || 0)}"></label>
       <label class="resource-policy-field">Cooldown (sec)<input class="input" type="number" min="0" step="1" data-policy-field="cooldown_seconds" value="${Number(policy.cooldown_seconds || 0)}"></label>
 	  <div class="resource-policy-ladder"><span class="resource-policy-ladder-title">Intervention ladder <small>seconds after grace</small></span>
-		${intervention('notify', 'Notify', 0)}
-		${intervention('lower_priority', 'Lower priority', 30, `<input class="input resource-policy-nice" type="number" min="1" max="19" step="1" data-step-nice value="${Number(step('lower_priority')?.nice || 10)}" aria-label="Nice value">`)}
-		${intervention('pause', 'Pause', 60)}
-		${intervention('terminate', 'Terminate', 120)}
+		${raw(intervention('notify', 'Notify', 0))}
+		${raw(intervention('lower_priority', 'Lower priority', 30, html`<input class="input resource-policy-nice" type="number" min="1" max="19" step="1" data-step-nice value="${Number(step('lower_priority')?.nice || 10)}" aria-label="Nice value">`))}
+		${raw(intervention('pause', 'Pause', 60))}
+		${raw(intervention('terminate', 'Terminate', 120))}
 	  </div>
-      ${isDefault ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="remove-resource-override" data-index="${index}">Remove</button>`}
+      ${isDefault ? '' : raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="remove-resource-override" data-index="${index}">Remove</button>`)}
     </div>`;
   }
 
   function renderResourcePolicyEditor() {
     if (!drawerBody || !resourcePolicyDraft) return;
-    drawerBody.innerHTML = `<p class="resource-policy-intro">Set machine-wide budgets, then add complete policies for specific workspace trees. The most specific matching path wins.</p>
-      <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Machine default</h4></div>${resourcePolicyFields(resourcePolicyDraft.default, -1, true)}</section>
+    drawerBody.innerHTML = html`<p class="resource-policy-intro">Set machine-wide budgets, then add complete policies for specific workspace trees. The most specific matching path wins.</p>
+      <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Machine default</h4></div>${raw(resourcePolicyFields(resourcePolicyDraft.default, -1, true))}</section>
       <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Workspace overrides</h4><span><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="current">Add current workspace</button><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="manual">Add path</button></span></div>
-      <div id="resource-policy-overrides">${resourcePolicyDraft.overrides.map((p, i) => resourcePolicyFields(p, i, false)).join('') || '<div class="resource-detail-empty">No workspace overrides. Every session uses the machine default.</div>'}</div></section>
+      <div id="resource-policy-overrides">${raw(resourcePolicyDraft.overrides.map((p, i) => resourcePolicyFields(p, i, false)).join('') || '<div class="resource-detail-empty">No workspace overrides. Every session uses the machine default.</div>')}</div></section>
 	  <p class="resource-policy-danger">Terminate mode applies every enabled intervention automatically. Pause stops the full attributed session until resumed; terminate ends it.</p>`;
   }
 
@@ -3419,8 +3419,8 @@ document.addEventListener('DOMContentLoaded', () => {
       title: 'Resource policy editor',
       icon: 'activity',
       variant: 'resource-policy',
-      foot: `<button type="button" class="btn btn-ghost" data-action="policy-cancel">Cancel</button>`
-        + `<button type="button" class="btn btn-primary" data-action="policy-save">Save and apply</button>`,
+      foot: html`<button type="button" class="btn btn-ghost" data-action="policy-cancel">Cancel</button>`
+        + html`<button type="button" class="btn btn-primary" data-action="policy-save">Save and apply</button>`,
       onClose: () => { resourcePolicyDraft = null; detailDrawer.setMode(null); },
     });
     renderResourcePolicyEditor();
@@ -4174,7 +4174,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const session = telemetryData.sessions?.find(s => s.id === d.id);
         detailDrawer.setMode('session-coverage');
         detailDrawer.setCopyVisible(false);
-        detailDrawer.open({ title: d.path === 'guard' ? 'Guard observations and setup' : 'Session observation sources', icon: 'history', body: `<div class="session-coverage-guide">${sessionCoverageGuideHTML(session, d.path, path)}</div>`, back: back() });
+        detailDrawer.open({ title: d.path === 'guard' ? 'Guard observations and setup' : 'Session observation sources', icon: 'history', body: html`<div class="session-coverage-guide">${raw(sessionCoverageGuideHTML(session, d.path, path))}</div>`, back: back() });
         break;
       }
       case 'session-coverage-traffic':
@@ -4572,9 +4572,9 @@ document.addEventListener('DOMContentLoaded', () => {
       hash: ([rule]) => curOf(rule),
       html: ([rule, label]) => {
         const cur = curOf(rule);
-        return `<div class="notify-rule-row">
-        <span class="notify-rule-name" title="${escapeHTML(rule)}">${escapeHTML(label)}</span>
-        <select class="select select-sm" data-notify-rule="${escapeHTML(rule)}" aria-label="Notifications for ${escapeHTML(label)}">
+        return html`<div class="notify-rule-row">
+        <span class="notify-rule-name" title="${rule}">${label}</span>
+        <select class="select select-sm" data-notify-rule="${rule}" aria-label="Notifications for ${label}">
           <option value="default"${cur === 'default' ? ' selected' : ''}>Default</option>
           <option value="always"${cur === 'always' ? ' selected' : ''}>Always</option>
           <option value="never"${cur === 'never' ? ' selected' : ''}>Never</option>
@@ -4597,10 +4597,10 @@ document.addEventListener('DOMContentLoaded', () => {
     patchList(list, scopes, {
       key: s => s.rule + '|' + s.workspace,
       hash: s => s.notify,
-      html: s => `<div class="notify-rule-row">
-        <span class="notify-rule-name" title="${escapeHTML(s.workspace)}">${escapeHTML(s.rule)} <span class="notify-scope-path">${escapeHTML(s.workspace)}</span></span>
+      html: s => html`<div class="notify-rule-row">
+        <span class="notify-rule-name" title="${s.workspace}">${s.rule} <span class="notify-scope-path">${s.workspace}</span></span>
         <span class="notify-scope-mode ${s.notify ? 'on' : 'off'}">${s.notify ? 'page' : 'quiet'}</span>
-        <button class="source-remove" title="Remove this scope" data-action="notify-scope-remove" data-rule="${escapeHTML(s.rule)}" data-workspace="${escapeHTML(s.workspace)}"><svg class="icon"><use href="#i-close"/></svg></button>
+        <button class="source-remove" title="Remove this scope" data-action="notify-scope-remove" data-rule="${s.rule}" data-workspace="${s.workspace}"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>`,
       empty: '<div class="notify-scope-empty">No workspace scopes yet</div>'
     });
@@ -4617,9 +4617,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const form = document.createElement('div');
     form.className = 'notify-scope-add';
     form.id = 'notify-scope-add-form';
-    form.innerHTML = `
+    form.innerHTML = html`
         <select class="select select-sm" id="notify-scope-rule" aria-label="Rule for the workspace scope">
-          ${NOTIFY_RULES.map(([rule, label]) => `<option value="${escapeHTML(rule)}">${escapeHTML(label)}</option>`).join('')}
+          ${NOTIFY_RULES.map(([rule, label]) => raw(html`<option value="${rule}">${label}</option>`))}
         </select>
         <input class="input input-sm" id="notify-scope-path" aria-label="Workspace path for notification scope" placeholder="repo path, e.g. ~/work/prod" autocomplete="off" spellcheck="false">
         <select class="select select-sm" id="notify-scope-mode" aria-label="Scope action">

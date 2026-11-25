@@ -203,6 +203,7 @@ function inspectorHarness() {
       controls.forEach(node=>{node.isConnected=false;}); controls.splice(0,controls.length,...this.next);
     }},getComputedStyle:node=>({display:node.display||'block',visibility:node.visibility||'visible'})};
   vm.createContext(ctx);
+  vm.runInContext(readFileSync(new URL('lib.js', assets), 'utf8'), ctx);
   vm.runInContext(fn('refreshAttentionInspector','  function reconcileAttention'),ctx);
   return {ctx,make,controls,focusCalls,close,refresh:()=>ctx.refreshAttentionInspector({id:'request'})};
 }
