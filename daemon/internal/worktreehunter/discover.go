@@ -2,14 +2,15 @@ package worktreehunter
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 // globalDirs are home-relative globs where agent apps keep worktrees outside
@@ -60,15 +61,24 @@ type orphanDir struct {
 // does, and names the repository it belongs to. A .git file whose gitdir no
 // longer exists yields an orphan instead.
 func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
+	if !filepath.IsAbs(dir) {
+		return repoRef{}, nil, false
+	}
 	dir = filepath.Clean(dir)
 	for {
 		dotGit := filepath.Join(dir, ".git")
 		st, err := os.Lstat(dotGit)
 		if err == nil {
 			if st.IsDir() {
+				if !isGitDirectory(dotGit) {
+					return repoRef{}, nil, false
+				}
 				return repoRef{Common: canonical(dotGit), Main: canonical(dir)}, nil, true
 			}
 			return resolveGitFile(dir)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return repoRef{}, nil, false
 		}
 		if isBareRepo(dir) {
 			c := canonical(dir)
@@ -93,18 +103,33 @@ func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
 		return repoRef{}, nil, false
 	}
 	gitdir = strings.TrimSpace(gitdir)
+	if gitdir == "" {
+		return repoRef{}, nil, false
+	}
 	if !filepath.IsAbs(gitdir) {
 		gitdir = filepath.Join(dir, gitdir)
 	}
-	if _, err := os.Stat(gitdir); err != nil {
+	st, err := os.Stat(gitdir)
+	if errors.Is(err, fs.ErrNotExist) {
 		return repoRef{}, &orphanDir{Path: canonical(dir), Main: mainFromAdminDir(gitdir), Name: filepath.Base(filepath.Clean(gitdir))}, false
+	}
+	if err != nil || !st.IsDir() {
+		return repoRef{}, nil, false
 	}
 	common := gitdir
 	if c, err := readGitPointer(gitdir, "commondir"); err == nil {
 		common = strings.TrimSpace(string(c))
+		if common == "" {
+			return repoRef{}, nil, false
+		}
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(gitdir, common)
 		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return repoRef{}, nil, false
+	}
+	if !isGitDirectory(common) {
+		return repoRef{}, nil, false
 	}
 	common = canonical(common)
 	if filepath.Base(common) == ".git" {
@@ -118,12 +143,7 @@ func resolveGitFile(dir string) (repoRef, *orphanDir, bool) {
 // before reading it and bound the read independently of its reported size.
 func readGitPointer(dir, name string) ([]byte, error) {
 	const maxPointerBytes = 8192
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := safefile.OpenRegularNoFollow(filepath.Join(dir, name))
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +152,7 @@ func readGitPointer(dir, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !fi.Mode().IsRegular() || fi.Size() > maxPointerBytes {
+	if fi.Size() > maxPointerBytes {
 		return nil, fs.ErrInvalid
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxPointerBytes+1))
@@ -159,8 +179,31 @@ func isBareRepo(dir string) bool {
 	if filepath.Base(dir) == ".git" || filepath.Ext(dir) != ".git" {
 		return false
 	}
-	for _, name := range []string{"HEAD", "objects", "refs"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+	return isGitDirectory(dir)
+}
+
+// isGitDirectory checks the common repository metadata before discovery
+// accepts it. Repository selectors may point to bare repos and submodules.
+func isGitDirectory(dir string) bool {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	head, err := root.Lstat("HEAD")
+	if err != nil {
+		return false
+	}
+	if head.Mode()&os.ModeSymlink != 0 {
+		ref, err := root.Readlink("HEAD")
+		if err != nil || !strings.HasPrefix(ref, "refs/") || !filepath.IsLocal(ref) {
+			return false
+		}
+	} else if !head.Mode().IsRegular() {
+		return false
+	}
+	for _, name := range []string{"objects", "refs"} {
+		if info, err := root.Stat(name); err != nil || !info.IsDir() {
 			return false
 		}
 	}

@@ -13,6 +13,49 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func TestResolveRepoRejectsInvalidGitMetadata(t *testing.T) {
+	dir := t.TempDir()
+	worktree := filepath.Join(dir, "worktree")
+	if err := os.Mkdir(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "not-a-directory"), "fixture")
+	for _, pointer := range []string{"gitdir: \n", "gitdir: ../not-a-directory\n", "gitdir: ../not-a-directory/child\n"} {
+		write(t, filepath.Join(worktree, ".git"), pointer)
+		if ref, orphan, ok := resolveRepo(worktree); ok || orphan != nil {
+			t.Errorf("resolveRepo(%q) = %+v, %+v, %v", pointer, ref, orphan, ok)
+		}
+	}
+
+	bare := filepath.Join(dir, "incomplete.git")
+	if err := os.Mkdir(bare, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"HEAD", "objects", "refs"} {
+		write(t, filepath.Join(bare, name), "fixture")
+	}
+	if ref, orphan, ok := resolveRepo(bare); ok || orphan != nil {
+		t.Errorf("invalid bare repo resolved as %+v, %+v, %v", ref, orphan, ok)
+	}
+}
+
+func TestResolveBareRepoWithLegacyHEAD(t *testing.T) {
+	isolateGit(t)
+	dir := canonical(t.TempDir())
+	bare := filepath.Join(dir, "repo.git")
+	run(t, dir, "init", "--bare", "--initial-branch=main", bare)
+	head := filepath.Join(bare, "HEAD")
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("refs/heads/main", head); err != nil {
+		t.Fatal(err)
+	}
+	if ref, orphan, ok := resolveRepo(bare); !ok || orphan != nil || !ref.Bare || ref.Common != bare {
+		t.Fatalf("repository with a symbolic HEAD resolved as %+v, %+v, %v", ref, orphan, ok)
+	}
+}
+
 // A repository that moved leaves its worktrees pointing at the old path:
 // the report groups them under the missing path, names the moved
 // repository as the reconnect candidate, and Reconnect links them again.

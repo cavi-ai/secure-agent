@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,7 +42,7 @@ func reconnectCandidate(repos []RepoReport, o orphanDir) string {
 		if !r.Bare {
 			common = filepath.Join(r.Path, ".git")
 		}
-		b, err := os.ReadFile(filepath.Join(common, "worktrees", o.Name, "gitdir"))
+		b, err := readGitPointer(filepath.Join(common, "worktrees", o.Name), "gitdir")
 		if err != nil {
 			continue
 		}

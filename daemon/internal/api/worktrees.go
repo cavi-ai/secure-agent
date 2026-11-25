@@ -544,7 +544,7 @@ func (a *API) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a folder the worktree report lists", http.StatusNotFound)
 		return
 	}
-	if _, err := os.Stat(p); err != nil {
+	if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
 		http.Error(w, "the folder no longer exists", http.StatusGone)
 		return
 	}

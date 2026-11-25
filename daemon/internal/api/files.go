@@ -22,6 +22,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/report"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -103,8 +104,11 @@ func (a *API) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []model.FileAccess) model.FileDetail {
 	home := explainHome()
 	d := model.FileDetail{Path: p, Display: report.DisplayPath(p, home), Findings: findings, Accesses: accesses, Hits: []model.FileHit{}}
-	fi, statErr := os.Stat(p)
-	if statErr == nil {
+	var fi os.FileInfo
+	if _, ok := evidencePath(p); ok {
+		fi, _ = os.Lstat(p)
+	}
+	if fi != nil {
 		d.Exists = true
 		d.Size = fi.Size()
 		d.ModTime = fi.ModTime().UTC().Format(time.RFC3339)
@@ -141,7 +145,7 @@ func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []mode
 		}
 	}
 	d.Subject = report.ExplainSubject(ev, workspace, repo, home)
-	if d.Exists && !fi.IsDir() && len(d.Hits) > 0 {
+	if d.Exists && fi.Mode().IsRegular() && len(d.Hits) > 0 {
 		d.Excerpt, d.ExcerptWithheld = a.fileExcerpt(p, d.Hits)
 	}
 	if base := filepath.Base(p); d.Exists && (base == ".env" || strings.HasPrefix(base, ".env.")) {
@@ -163,13 +167,7 @@ func (a *API) fileExcerpt(p string, hits []model.FileHit) (string, string) {
 		return "", "masking is unavailable: the firewall engine is not running"
 	}
 	// The caller has matched the exact path against recorded evidence.
-	dir, name := filepath.Split(p)
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", "the file could not be read safely"
-	}
-	defer root.Close()
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := safefile.OpenRegularNoFollow(p)
 	if err != nil {
 		return "", "the file could not be read safely"
 	}
@@ -390,7 +388,7 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Lstat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "the file no longer exists", http.StatusGone)
@@ -401,6 +399,10 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 	}
 	if flag == "-t" && fi.IsDir() {
 		http.Error(w, "a folder cannot be opened in an editor; reveal it instead", http.StatusBadRequest)
+		return
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || (flag == "-t" && !fi.Mode().IsRegular()) {
+		http.Error(w, "file type is not supported for this action", http.StatusBadRequest)
 		return
 	}
 	if err := a.openPath(flag, p); err != nil {
@@ -475,11 +477,10 @@ var envAssignment = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]
 // single-line dotenv file. Ambiguous/multiline syntax withholds the list.
 // O_NONBLOCK and O_NOFOLLOW reject symlink/FIFO substitution without hanging.
 func envVariableNames(path string) ([]string, string) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := safefile.OpenRegularNoFollow(path)
 	if err != nil {
 		return nil, "Variable names unavailable: file cannot be opened safely."
 	}
-	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() || !ownedByUser(fi) || fi.Size() > 64<<10 {
