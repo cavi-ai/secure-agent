@@ -209,7 +209,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     open({
       title: `Incident report — ${id}`,
       icon: 'doc',
-      body: `<div class="loading-spinner">Fetching incident report…</div>`,
+      body: html`<div class="loading-spinner">Fetching incident report…</div>`,
       onClose: () => { mode = null; },
       back,
     });
@@ -232,11 +232,11 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
         const message = res.status === 404 || detail.status === 404
           ? 'This incident report is no longer available. Its source may have expired; the retained session summary does not replace the report.'
           : 'Failed to load the incident report.';
-        body.innerHTML = `<div class="empty" role="status"><svg class="icon"><use href="#i-doc"/></svg><span>${message}</span></div>`;
+        body.innerHTML = html`<div class="empty" role="status"><svg class="icon"><use href="#i-doc"/></svg><span>${message}</span></div>`;
       }
     } catch (err) {
       if (mine !== seq) return;
-      body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
+      body.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${err.message}</span></div>`;
     }
   }
 
@@ -256,7 +256,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
       back,
     });
     const mine = seq;
-    body.innerHTML = `<div class="loading-spinner">Identifying ${escapeHTML(host)}…</div>`;
+    body.innerHTML = html`<div class="loading-spinner">Identifying ${host}…</div>`;
     try {
       const res = await request(`/egress/endpoint?host=${encodeURIComponent(host)}`);
       if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
@@ -265,7 +265,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
       body.innerHTML = endpointDetailHTML(detail, agent);
     } catch (err) {
       if (mine !== seq) return;
-      body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>Could not identify this endpoint: ${escapeHTML(err.message || err)}</span></div>`;
+      body.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>Could not identify this endpoint: ${err.message || err}</span></div>`;
     }
   }
 
@@ -284,7 +284,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
       back,
     });
     const mine = seq;
-    body.innerHTML = `<div class="loading-spinner">Reading ${escapeHTML(path)}…</div>`;
+    body.innerHTML = html`<div class="loading-spinner">Reading ${path}…</div>`;
     try {
       const res = await request(`/files/detail?path=${encodeURIComponent(path)}`);
       if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
@@ -294,7 +294,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
       plan.load('file:' + path);
     } catch (err) {
       if (mine !== seq) return;
-      body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Could not read this file: ${escapeHTML(err.message || err)}</span></div>`;
+      body.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Could not read this file: ${err.message || err}</span></div>`;
     }
   }
 
@@ -304,7 +304,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     planSubject = subject;
     setCopyVisible(false);
     open({ title: 'What to do', icon: 'doc', onClose: () => { mode = null; }, back });
-    body.innerHTML = `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>`;
+    body.innerHTML = html`<div class="plan-slot" data-plan-subject="${subject}"><div class="loading-spinner">Loading the playbook…</div></div>`;
     plan.load(subject);
   }
 
@@ -329,36 +329,36 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
       // served actions must still be available to the click handler now.
       flag.cache(f);
       const subject = 'flag:' + f.id;
-      const evidence = (f.evidence || []).map(ev => `<li>${escapeHTML(typeof ev === 'string' ? ev : ev.text || (ev.sub ? `${ev.label || ''} (${ev.sub})` : ev.label || ''))}</li>`).join('');
-      const advisor = f.advisor ? `<p><b>Advisor:</b> ${escapeHTML(f.advisor.assessment || 'unrated')} · ${escapeHTML(f.advisor.rationale || '')}</p>` : '';
+      const evidence = (f.evidence || []).map(ev => html`<li>${typeof ev === 'string' ? ev : ev.text || (ev.sub ? `${ev.label || ''} (${ev.sub})` : ev.label || '')}</li>`).join('');
+      const advisor = f.advisor ? html`<p><b>Advisor:</b> ${f.advisor.assessment || 'unrated'} · ${f.advisor.rationale || ''}</p>` : '';
       const reading = explainLines(f);
       title.textContent = f.title || ruleTitle(f.rule);
-      body.innerHTML = `<div class="panel-body flag-inspector">
-      <p>${escapeHTML(f.title || ruleTitle(f.rule))} · severity ${Number(f.severity) || 0} · ${escapeHTML(f.agent || 'unknown agent')}</p>
-      <dl class="finding-facts"><dt>Raised</dt><dd>${escapeHTML(new Date(f.ts).toLocaleString())}</dd><dt>Process</dt><dd>PID ${Number(f.pid) || 0}</dd>
-        <dt>Session</dt><dd>${escapeHTML(f.session_id || 'unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(f.workspace || 'unknown')}</dd><dt>Flag ID</dt><dd>${escapeHTML(f.id)}</dd></dl>
-      ${reading ? `<p class="finding-what">${escapeHTML(reading.what || '')}</p>${factChipsHTML(f, '')}<p class="finding-verdict">${escapeHTML(reading.verdict || '')}</p>` : ''}
-      ${f.explain?.assessment ? assessmentHTML(f.explain.assessment) : advisor}<h4>Recorded evidence</h4>${evidence ? `<ul class="plan-list">${evidence}</ul>` : '<p>No evidence rows were recorded for this flag.</p>'}
+      body.innerHTML = html`<div class="panel-body flag-inspector">
+      <p>${f.title || ruleTitle(f.rule)} · severity ${Number(f.severity) || 0} · ${f.agent || 'unknown agent'}</p>
+      <dl class="finding-facts"><dt>Raised</dt><dd>${new Date(f.ts).toLocaleString()}</dd><dt>Process</dt><dd>PID ${Number(f.pid) || 0}</dd>
+        <dt>Session</dt><dd>${f.session_id || 'unknown'}</dd><dt>Workspace</dt><dd>${f.workspace || 'unknown'}</dd><dt>Flag ID</dt><dd>${f.id}</dd></dl>
+      ${reading ? raw(html`<p class="finding-what">${reading.what || ''}</p>${raw(factChipsHTML(f, ''))}<p class="finding-verdict">${reading.verdict || ''}</p>`) : ''}
+      ${raw(f.explain?.assessment ? assessmentHTML(f.explain.assessment) : advisor)}<h4>Recorded evidence</h4>${evidence ? raw(html`<ul class="plan-list">${raw(evidence)}</ul>`) : raw('<p>No evidence rows were recorded for this flag.</p>')}
       <div class="flag-actions-row">${f.explain
-        ? explainActionsHTML(f, flag.advisorEnabled() ? [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(f.id)}"` }] : [])
-        : `<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}">Dismiss flag</button>`}</div>
-      <h4>What to do</h4><div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>
+        ? raw(explainActionsHTML(f, flag.advisorEnabled() ? [{ label: 'Re-run advisor', attrs: html`data-action="retriage" data-id="${f.id}"` }] : []))
+        : raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${f.id}">Dismiss flag</button>`)}</div>
+      <h4>What to do</h4><div class="plan-slot" data-plan-subject="${subject}"><div class="loading-spinner">Loading the playbook…</div></div>
     </div>`;
       plan.load(subject);
     } catch (err) {
       if (mine !== seq) return;
       title.textContent = summary?.title || 'Security flag';
       const facts = [['Flag ID', id], ['Rule', summary?.rule], ['Session', summary?.session_id], ['Workspace', summary?.group?.workspace]].filter(([, value]) => value);
-      body.innerHTML = `<div class="panel-body flag-inspector">
+      body.innerHTML = html`<div class="panel-body flag-inspector">
         <h3>${missing ? 'Evidence unavailable' : 'Evidence could not be loaded'}</h3>
-        ${summary ? `<p>${escapeHTML(summary.detail || summary.title)}</p><p>This is the queued summary, not the source evidence.</p>` : ''}
-        <p role="status">${escapeHTML(err.message || err)}</p>
-        <dl class="finding-facts">${facts.map(([label, value]) => `<dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd>`).join('')}</dl>
-        ${summary || !missing ? `<div class="flag-actions-row">
-          <button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Retry evidence</button>
+        ${summary ? raw(html`<p>${summary.detail || summary.title}</p><p>This is the queued summary, not the source evidence.</p>`) : ''}
+        <p role="status">${err.message || err}</p>
+        <dl class="finding-facts">${facts.map(([label, value]) => raw(html`<dt>${label}</dt><dd>${value}</dd>`))}</dl>
+        ${summary || !missing ? raw(html`<div class="flag-actions-row">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${id}">Retry evidence</button>
           <button type="button" class="btn btn-ghost btn-sm" data-action="refresh-finding-queue">Refresh queue</button>
-          ${!missing && summary ? `<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(id)}">Dismiss flag</button>` : ''}
-        </div>` : ''}
+          ${!missing && summary ? raw(html`<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${id}">Dismiss flag</button>`) : ''}
+        </div>`) : ''}
         <p>${missing ? (summary ? 'Refresh the queue to reconcile this missing record.' : 'The retained history does not replace the missing source evidence.') : 'Dismissing marks the flag reviewed. The rule keeps watching.'}</p>
       </div>`;
     }
@@ -417,7 +417,7 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
     if (mode !== 'family' || !drawer || drawer.hidden) return;
     const fam = family.byKey(familyKey);
     if (!fam) {
-      body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>This family is no longer running.</span></div>`;
+      body.innerHTML = html`<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>This family is no longer running.</span></div>`;
       foot.innerHTML = '';
       foot._saFoot = undefined;
       foot.hidden = true;
