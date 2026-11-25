@@ -536,15 +536,16 @@ func (a *API) worktreePath(w http.ResponseWriter, r *http.Request) (string, bool
 // handleWorktreeReveal serves POST /worktrees/reveal: Finder selects a
 // folder the current worktree report lists.
 func (a *API) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.worktreePath(w, r)
+	requestedPath, ok := a.worktreePath(w, r)
 	if !ok {
 		return
 	}
-	if !a.worktrees.Listed(p) {
+	p := a.worktrees.ListedPath(requestedPath)
+	if p == "" {
 		http.Error(w, "not a folder the worktree report lists", http.StatusNotFound)
 		return
 	}
-	if _, err := os.Stat(p); err != nil {
+	if fi, err := os.Lstat(p); err != nil || !fi.IsDir() {
 		http.Error(w, "the folder no longer exists", http.StatusGone)
 		return
 	}

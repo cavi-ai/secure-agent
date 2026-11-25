@@ -13,6 +13,72 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func TestResolveRepoRejectsInvalidGitMetadata(t *testing.T) {
+	dir := t.TempDir()
+	worktree := filepath.Join(dir, "worktree")
+	if err := os.Mkdir(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "not-a-directory"), "fixture")
+	for _, pointer := range []string{"gitdir: \n", "gitdir: ../not-a-directory\n", "gitdir: ../not-a-directory/child\n"} {
+		write(t, filepath.Join(worktree, ".git"), pointer)
+		if ref, orphan, ok := resolveRepo(worktree); ok || orphan != nil {
+			t.Errorf("resolveRepo(%q) = %+v, %+v, %v", pointer, ref, orphan, ok)
+		}
+	}
+
+	bare := filepath.Join(dir, "incomplete.git")
+	if err := os.Mkdir(bare, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"HEAD", "objects", "refs"} {
+		write(t, filepath.Join(bare, name), "fixture")
+	}
+	if ref, orphan, ok := resolveRepo(bare); ok || orphan != nil {
+		t.Errorf("invalid bare repo resolved as %+v, %+v, %v", ref, orphan, ok)
+	}
+}
+
+func TestResolveBareRepoWithLegacyHEAD(t *testing.T) {
+	isolateGit(t)
+	dir := canonical(t.TempDir())
+	bare := filepath.Join(dir, "repo.git")
+	run(t, dir, "init", "--bare", "--initial-branch=main", bare)
+	head := filepath.Join(bare, "HEAD")
+	if err := os.Remove(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("refs/heads/main", head); err != nil {
+		t.Fatal(err)
+	}
+	if ref, orphan, ok := resolveRepo(bare); !ok || orphan != nil || !ref.Bare || ref.Common != bare {
+		t.Fatalf("repository with a symbolic HEAD resolved as %+v, %+v, %v", ref, orphan, ok)
+	}
+}
+
+func TestResolveRepoWithExternalObjectDirectory(t *testing.T) {
+	isolateGit(t)
+	dir := canonical(t.TempDir())
+	repo := filepath.Join(dir, "repo")
+	run(t, dir, "init", "--initial-branch=main", repo)
+	commit(t, repo, "file", "contents\n", "initial commit")
+	gitDir := filepath.Join(repo, ".git")
+	objects := filepath.Join(gitDir, "objects")
+	external := filepath.Join(dir, "objects")
+	if err := os.Rename(objects, external); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, objects); err != nil {
+		t.Fatal(err)
+	}
+	if got := run(t, repo, "cat-file", "-t", "HEAD"); got != "commit" {
+		t.Fatalf("git cat-file -t HEAD = %q, want commit", got)
+	}
+	if ref, orphan, ok := resolveRepo(repo); !ok || orphan != nil || ref != (repoRef{Common: gitDir, Main: repo}) {
+		t.Fatalf("resolveRepo(%q) = %+v, %+v, %v", repo, ref, orphan, ok)
+	}
+}
+
 // A repository that moved leaves its worktrees pointing at the old path:
 // the report groups them under the missing path, names the moved
 // repository as the reconnect candidate, and Reconnect links them again.
@@ -105,7 +171,7 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 			t.Fatalf("its error line stayed: %q", e)
 		}
 	}
-	if !h.Listed(wt) || h.Listed(lost) || h.Listed("/nowhere") {
+	if h.ListedPath(wt) != wt || h.ListedPath(lost) != "" || h.ListedPath("/nowhere") != "" {
 		t.Fatal("Listed does not follow the report")
 	}
 	h.bgWG.Wait()

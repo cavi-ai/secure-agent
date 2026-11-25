@@ -58,6 +58,7 @@ func (s *Store) PathFindings(path string, limit int) (findings []model.FileFindi
 			continue
 		}
 		f.Kind = "flag"
+		f.RecordedPath = ev[i].Label
 		f.EvidenceKind, f.EvidenceRule, f.Offset = ev[i].Kind, ev[i].Rule, ev[i].Offset
 		f.Acknowledged = ack != ""
 		out = append(out, f)
@@ -84,12 +85,14 @@ func (s *Store) PathFindings(path string, limit int) (findings []model.FileFindi
 		if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
 			return nil, fmt.Errorf("decode path finding incident: %w", err)
 		}
-		if !slices.Contains(inc.TouchedFiles, path) {
+		i := slices.Index(inc.TouchedFiles, path)
+		if i < 0 {
 			continue
 		}
 		out = append(out, model.FileFinding{
 			Kind: "incident", ID: inc.ID, Rule: inc.Rule, Risk: string(inc.Risk),
 			TS: inc.Timestamp.UTC().Format(time.RFC3339Nano), Agent: inc.Agent, SessionID: inc.SessionID, Status: status,
+			RecordedPath: inc.TouchedFiles[i],
 		})
 		incidents++
 	}
@@ -104,7 +107,7 @@ func (s *Store) PathFindings(path string, limit int) (findings []model.FileFindi
 func (s *Store) PathAccesses(path string, limit int) (accesses []model.FileAccess, readErr error) {
 	defer func() { s.noteRead("path accesses", readErr) }()
 	out := []model.FileAccess{}
-	rows, err := s.db.Query(`SELECT kind, ts, pid, COALESCE(exe_path, ''), session_id FROM events
+	rows, err := s.db.Query(`SELECT kind, ts, pid, COALESCE(exe_path, ''), session_id, path FROM events
 		WHERE path = ? AND kind IN (?, ?, ?) AND COALESCE(session_id, '') != '' ORDER BY id DESC LIMIT ?`,
 		path, int(event.KindFileOpen), int(event.KindFileWrite), int(event.KindFileDelete), normalizeLimit(limit))
 	if err != nil {
@@ -114,7 +117,7 @@ func (s *Store) PathAccesses(path string, limit int) (accesses []model.FileAcces
 	for rows.Next() {
 		var a model.FileAccess
 		var kind int
-		if err := rows.Scan(&kind, &a.TS, &a.PID, &a.ExePath, &a.SessionID); err != nil {
+		if err := rows.Scan(&kind, &a.TS, &a.PID, &a.ExePath, &a.SessionID, &a.RecordedPath); err != nil {
 			return nil, err
 		}
 		if _, err := time.Parse(time.RFC3339Nano, a.TS); err != nil {

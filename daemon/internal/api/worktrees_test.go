@@ -645,6 +645,22 @@ func TestWorktreeOrphanEndpoints(t *testing.T) {
 	if len(opened) != 1 || opened[0] != "-R "+orphan {
 		t.Fatalf("opened = %q", opened)
 	}
+	moved := orphan + "-moved"
+	if err := os.Rename(orphan, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, orphan); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do("/worktrees/reveal", `{"path":"`+orphan+`"}`); rec.Code != http.StatusGone || len(opened) != 1 {
+		t.Fatalf("reveal after folder became a link: status %d, opened %q", rec.Code, opened)
+	}
+	if err := os.Remove(orphan); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(moved, orphan); err != nil {
+		t.Fatal(err)
+	}
 	rec := do("/worktrees/trash", `{"path":"`+orphan+`"}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"trash_path"`) {
 		t.Fatalf("trash: %d %s", rec.Code, rec.Body.String())

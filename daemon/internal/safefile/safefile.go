@@ -1,5 +1,5 @@
-// Package safefile provides crash-consistent writes for the daemon's
-// security-state files. A bare os.WriteFile can leave a truncated file if the
+// Package safefile provides guarded reads and crash-consistent writes for
+// the daemon's files. A bare os.WriteFile can leave a truncated file if the
 // daemon is killed mid-write (it is designed to survive SIGKILL), and the
 // corresponding Load paths then treat the file as corrupt and drop ALL state —
 // block promotions, fingerprints, sources. Temp-file + fsync + rename means a

@@ -462,7 +462,7 @@ What the daemon knows about one evidence file, and two local actions on it. `pat
 | Field | Meaning |
 |---|---|
 | `path`, `display` | The path and its `~`-abbreviated, middle-truncated form. |
-| `exists`, `size`, `mod_time`, `owned_by_user` | From `stat`; a file deleted since the flag has `exists: false` and nothing is read. |
+| `exists`, `size`, `mod_time`, `owned_by_user` | Metadata for the recorded entry. For a symbolic link, these fields describe the link itself. A file deleted since the flag has `exists: false` and nothing is read. |
 | `subject` | Category, category label and owner label, as in the flag explanation. |
 | `session` | The session that touched it or owns the transcript. |
 | `findings` | Up to 20 flags and 20 incidents naming the path: kind, id, rule, severity or risk, time, agent, session; flags carry the matched evidence item's kind, rule and line `offset`. |
@@ -471,7 +471,7 @@ What the daemon knows about one evidence file, and two local actions on it. `pat
 | `excerpt` | At most 4 KB: 1.5 KB either side of each masked secret, every fingerprint and pattern hit replaced by `[REDACTED:<rule>]`. Text away from a mask marker is never shown. |
 | `excerpt_withheld` | Why there is no excerpt: masking unavailable, a secret still detected after masking (an encoded copy), or the line not found. |
 
-`POST /files/reveal {"path": "…"}` runs `open -R` (Finder selects the file); `POST /files/open {"path": "…"}` runs `open -t` (the default text editor, so nothing is executed; folders are 400). A deleted file is 410; off macOS both are 501. Each success writes an audit entry (`file-reveal`, `file-open`) with the path.
+`POST /files/reveal {"path": "…"}` runs `open -R` (Finder selects the file). `POST /files/open {"path": "…"}` runs `open -t` for regular files. Both actions return 400 for symbolic links, 410 for deleted files, and 501 off macOS. Each success writes an audit entry (`file-reveal`, `file-open`) with the path.
 
 ---
 

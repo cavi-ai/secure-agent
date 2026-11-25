@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 const maxDefinition = 64 * 1024
@@ -188,7 +190,7 @@ func ownedFile(path string, limit int, private bool) ([]byte, os.FileMode, error
 	if !filepath.IsAbs(path) || len(path) > 4096 {
 		return nil, 0, errors.New("an absolute owned file path is required")
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := safefile.OpenRegularNoFollow(path)
 	if err != nil {
 		return nil, 0, errors.New("owned file unavailable")
 	}

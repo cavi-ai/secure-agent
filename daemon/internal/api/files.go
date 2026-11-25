@@ -22,6 +22,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/report"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -48,32 +49,24 @@ func evidencePath(p string) (string, bool) {
 	return p, true
 }
 
-// fileEvidenceGate is what stored findings and session accesses say about
-// one path. A read error is unavailable. Both empty is missing. Any row is
-// known.
-type fileEvidenceGate int
-
-const (
-	fileEvidenceKnown fileEvidenceGate = iota
-	fileEvidenceMissing
-	fileEvidenceUnavailable
-)
-
 // fileEvidence reads at most limit findings and limit session accesses that
-// name path.
-func (a *API) fileEvidence(path string, limit int) ([]model.FileFinding, []model.FileAccess, fileEvidenceGate, error) {
+// name path. Filesystem actions use the path returned by the matching record.
+func (a *API) fileEvidence(path string, limit int) (string, []model.FileFinding, []model.FileAccess, error) {
 	findings, err := a.store.PathFindings(path, limit)
 	if err != nil {
-		return nil, nil, fileEvidenceUnavailable, err
+		return "", nil, nil, err
 	}
 	accesses, err := a.store.PathAccesses(path, limit)
 	if err != nil {
-		return nil, nil, fileEvidenceUnavailable, err
+		return "", nil, nil, err
 	}
-	if len(findings) == 0 && len(accesses) == 0 {
-		return findings, accesses, fileEvidenceMissing, nil
+	if len(findings) > 0 {
+		return findings[0].RecordedPath, findings, accesses, nil
 	}
-	return findings, accesses, fileEvidenceKnown, nil
+	if len(accesses) > 0 {
+		return accesses[0].RecordedPath, findings, accesses, nil
+	}
+	return "", findings, accesses, nil
 }
 
 // handleFileDetail serves GET /files/detail?path=: what the daemon knows
@@ -88,23 +81,26 @@ func (a *API) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path must be absolute and clean", http.StatusBadRequest)
 		return
 	}
-	findings, accesses, gate, err := a.fileEvidence(p, fileListLimit)
-	if err != nil || gate == fileEvidenceUnavailable {
+	recordedPath, findings, accesses, err := a.fileEvidence(p, fileListLimit)
+	if err != nil {
 		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
-	if gate == fileEvidenceMissing {
+	if recordedPath == "" {
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, a.fileDetail(p, findings, accesses))
+	writeJSON(w, a.fileDetail(recordedPath, findings, accesses))
 }
 
 func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []model.FileAccess) model.FileDetail {
 	home := explainHome()
 	d := model.FileDetail{Path: p, Display: report.DisplayPath(p, home), Findings: findings, Accesses: accesses, Hits: []model.FileHit{}}
-	fi, statErr := os.Stat(p)
-	if statErr == nil {
+	var fi os.FileInfo
+	if _, ok := evidencePath(p); ok {
+		fi, _ = os.Lstat(p)
+	}
+	if fi != nil {
 		d.Exists = true
 		d.Size = fi.Size()
 		d.ModTime = fi.ModTime().UTC().Format(time.RFC3339)
@@ -141,7 +137,7 @@ func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []mode
 		}
 	}
 	d.Subject = report.ExplainSubject(ev, workspace, repo, home)
-	if d.Exists && !fi.IsDir() && len(d.Hits) > 0 {
+	if d.Exists && fi.Mode().IsRegular() && len(d.Hits) > 0 {
 		d.Excerpt, d.ExcerptWithheld = a.fileExcerpt(p, d.Hits)
 	}
 	if base := filepath.Base(p); d.Exists && (base == ".env" || strings.HasPrefix(base, ".env.")) {
@@ -163,13 +159,7 @@ func (a *API) fileExcerpt(p string, hits []model.FileHit) (string, string) {
 		return "", "masking is unavailable: the firewall engine is not running"
 	}
 	// The caller has matched the exact path against recorded evidence.
-	dir, name := filepath.Split(p)
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", "the file could not be read safely"
-	}
-	defer root.Close()
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := safefile.OpenRegularNoFollow(p)
 	if err != nil {
 		return "", "the file could not be read safely"
 	}
@@ -376,21 +366,21 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 		http.Error(w, "body must be {\"path\": \"…\"}", http.StatusBadRequest)
 		return
 	}
-	p, ok := evidencePath(req.Path)
+	requestedPath, ok := evidencePath(req.Path)
 	if !ok {
 		http.Error(w, "path must be absolute and clean", http.StatusBadRequest)
 		return
 	}
-	_, _, gate, err := a.fileEvidence(p, 1)
-	if err != nil || gate == fileEvidenceUnavailable {
+	p, _, _, err := a.fileEvidence(requestedPath, 1)
+	if err != nil {
 		http.Error(w, "File evidence unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
-	if gate != fileEvidenceKnown {
+	if p == "" {
 		http.Error(w, "no stored evidence names this path", http.StatusNotFound)
 		return
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Lstat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "the file no longer exists", http.StatusGone)
@@ -401,6 +391,10 @@ func (a *API) fileAction(w http.ResponseWriter, r *http.Request, action, flag st
 	}
 	if flag == "-t" && fi.IsDir() {
 		http.Error(w, "a folder cannot be opened in an editor; reveal it instead", http.StatusBadRequest)
+		return
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || (flag == "-t" && !fi.Mode().IsRegular()) {
+		http.Error(w, "file type is not supported for this action", http.StatusBadRequest)
 		return
 	}
 	if err := a.openPath(flag, p); err != nil {
@@ -475,11 +469,10 @@ var envAssignment = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]
 // single-line dotenv file. Ambiguous/multiline syntax withholds the list.
 // O_NONBLOCK and O_NOFOLLOW reject symlink/FIFO substitution without hanging.
 func envVariableNames(path string) ([]string, string) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := safefile.OpenRegularNoFollow(path)
 	if err != nil {
 		return nil, "Variable names unavailable: file cannot be opened safely."
 	}
-	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() || !ownedByUser(fi) || fi.Size() > 64<<10 {

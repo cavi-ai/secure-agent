@@ -17,8 +17,9 @@ func TestFileActionsDistinguishStatFailureFromDeletedFile(t *testing.T) {
 	rec := &openRecorder{}
 
 	a := newTestAPI(Deps{SocketPath: "", Store: st, Killer: nil, Status: func() Status { return Status{Running: true} }, System: SystemDeps{OpenPath: rec.open}})
-	p := filepath.Join(t.TempDir(), "evidence.jsonl")
-	if err := os.Symlink(p, p); err != nil {
+	parent := filepath.Join(t.TempDir(), "evidence")
+	p := filepath.Join(parent, "entry.jsonl")
+	if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.PutFlag(model.Flag{ID: "f1", TS: time.Now(), Evidence: []model.EvidenceItem{{Label: p}}}); err != nil {
@@ -33,7 +34,10 @@ func TestFileActionsDistinguishStatFailureFromDeletedFile(t *testing.T) {
 	if len(rec.calls) != 0 || len(st.RecentAudit(10)) != 0 {
 		t.Errorf("stat failure ran or recorded a file action: %v", rec.calls)
 	}
-	if err := os.Remove(p); err != nil {
+	if err := os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(parent, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(p, []byte("one\n"), 0o600); err != nil {

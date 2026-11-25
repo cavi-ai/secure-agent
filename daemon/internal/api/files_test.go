@@ -176,6 +176,32 @@ func TestFileDetailDeletedFile(t *testing.T) {
 	}
 }
 
+func TestFileDetailReportsTheRecordedLinkWithoutReadingItsTarget(t *testing.T) {
+	a := fileTestAPI(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "settings")
+	if err := os.WriteFile(target, []byte("MODE=fixture\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, ".env")
+	if err := os.Symlink("settings", p); err != nil {
+		t.Fatal(err)
+	}
+	link, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putTranscriptFlag(a, "file-link", p, 0)
+
+	w, d := getDetail(t, a, p)
+	if w.Code != http.StatusOK || !d.Exists || d.Size != link.Size() || len(d.Findings) != 1 {
+		t.Fatalf("status %d detail %+v", w.Code, d)
+	}
+	if d.Excerpt != "" || len(d.EnvVariables) != 0 {
+		t.Fatalf("linked file content appeared in the detail: %+v", d)
+	}
+}
+
 // A multi-MB single line yields a bounded excerpt with the secret masked.
 func TestFileDetailHugeLineExcerptBounded(t *testing.T) {
 	a := fileTestAPI(t)
@@ -230,6 +256,11 @@ func TestFileRevealAndOpen(t *testing.T) {
 	putTranscriptFlag(a, "f2", dir, 0)
 	gone := filepath.Join(dir, "gone.jsonl")
 	putTranscriptFlag(a, "f3", gone, 0)
+	link := filepath.Join(dir, "link.jsonl")
+	if err := os.Symlink(p, link); err != nil {
+		t.Fatal(err)
+	}
+	putTranscriptFlag(a, "f4", link, 0)
 
 	cases := []struct {
 		name   string
@@ -242,6 +273,8 @@ func TestFileRevealAndOpen(t *testing.T) {
 		{"open", a.handleFileOpen, http.MethodPost, p, http.StatusOK},
 		{"reveal dir", a.handleFileReveal, http.MethodPost, dir, http.StatusOK},
 		{"open dir", a.handleFileOpen, http.MethodPost, dir, http.StatusBadRequest},
+		{"reveal link", a.handleFileReveal, http.MethodPost, link, http.StatusBadRequest},
+		{"open link", a.handleFileOpen, http.MethodPost, link, http.StatusBadRequest},
 		{"not evidence", a.handleFileOpen, http.MethodPost, "/w/other.txt", http.StatusNotFound},
 		{"deleted", a.handleFileReveal, http.MethodPost, gone, http.StatusGone},
 		{"GET", a.handleFileOpen, http.MethodGet, p, http.StatusMethodNotAllowed},
