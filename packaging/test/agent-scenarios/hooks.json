@@ -1,0 +1,113 @@
+{
+  "envelope": {
+    "session_id": "agent-scenarios",
+    "hook_event_name": "PreToolUse",
+    "cwd": "{project}"
+  },
+  "next_step_cues": [
+    "ask the user",
+    "ask them",
+    "propose the change",
+    "approve it",
+    "add an allow",
+    "tell the user"
+  ],
+  "scenarios": [
+    {
+      "name": "ssh-keys-read-denied",
+      "rule": "ssh-keys",
+      "entry": ["secret_guard.py"],
+      "modes": {"ssh-keys": "deny"},
+      "payload": {"tool_name": "Read", "tool_input": {"file_path": "{home}/.ssh/id_ed25519"}},
+      "cause": [".ssh/id_ed25519"]
+    },
+    {
+      "name": "ssh-keys-directory-scan-denied",
+      "rule": "ssh-keys",
+      "entry": ["secret_guard.py"],
+      "modes": {"ssh-keys": "deny"},
+      "payload": {"tool_name": "Grep", "tool_input": {"pattern": "PRIVATE KEY", "path": "{home}/.ssh"}},
+      "cause": ["/.ssh"]
+    },
+    {
+      "name": "cloud-creds-read-denied",
+      "rule": "cloud-creds",
+      "entry": ["secret_guard.py"],
+      "modes": {"cloud-creds": "deny"},
+      "payload": {"tool_name": "Read", "tool_input": {"file_path": "{home}/.aws/credentials"}},
+      "cause": [".aws/credentials"]
+    },
+    {
+      "name": "cloud-creds-codex-prompt-monitor-offline",
+      "rule": "cloud-creds",
+      "entry": ["harness_guard.py", "codex"],
+      "modes": {"cloud-creds": "prompt"},
+      "payload": {"tool_name": "read", "tool_input": {"path": "{home}/.kube/config"}},
+      "cause": [".kube/config"]
+    },
+    {
+      "name": "keychain-read-denied",
+      "rule": "keychain",
+      "entry": ["secret_guard.py"],
+      "modes": {"keychain": "deny"},
+      "payload": {"tool_name": "Read", "tool_input": {"file_path": "{home}/Library/Keychains/login.keychain-db"}},
+      "cause": ["login.keychain-db"]
+    },
+    {
+      "name": "keychain-directory-scan-denied",
+      "rule": "keychain",
+      "entry": ["secret_guard.py"],
+      "modes": {"keychain": "deny"},
+      "payload": {"tool_name": "Glob", "tool_input": {"pattern": "**/*", "path": "{home}/Library/Keychains"}},
+      "cause": ["Library/Keychains"]
+    },
+    {
+      "name": "env-files-read-denied",
+      "rule": "env-files",
+      "entry": ["secret_guard.py"],
+      "modes": {"env-files": "deny"},
+      "payload": {"tool_name": "Read", "tool_input": {"file_path": "{project}/.env"}},
+      "cause": ["project/.env"]
+    },
+    {
+      "name": "env-files-shell-read-denied",
+      "rule": "env-files",
+      "entry": ["secret_guard.py"],
+      "modes": {"env-files": "deny"},
+      "payload": {"tool_name": "Bash", "tool_input": {"command": "cat {project}/.env.local"}},
+      "cause": [".env.local"]
+    },
+    {
+      "name": "shell-rc-read-denied",
+      "rule": "shell-rc",
+      "entry": ["secret_guard.py"],
+      "modes": {"shell-rc": "deny"},
+      "payload": {"tool_name": "Read", "tool_input": {"file_path": "{home}/.zshrc"}},
+      "cause": [".zshrc"]
+    },
+    {
+      "name": "shell-rc-shell-read-denied",
+      "rule": "shell-rc",
+      "entry": ["secret_guard.py"],
+      "modes": {"shell-rc": "deny"},
+      "payload": {"tool_name": "Bash", "tool_input": {"command": "cat {home}/.zshrc"}},
+      "cause": [".zshrc"]
+    },
+    {
+      "name": "harness-config-read-denied",
+      "rule": "harness-config",
+      "entry": ["secret_guard.py"],
+      "modes": {"harness-config": "deny"},
+      "payload": {"tool_name": "Read", "tool_input": {"file_path": "{home}/.claude/settings.json"}},
+      "cause": [".claude/settings.json"]
+    },
+    {
+      "name": "harness-config-codex-read-denied",
+      "rule": "harness-config",
+      "entry": ["harness_guard.py", "codex"],
+      "modes": {"harness-config": "deny"},
+      "payload": {"tool_name": "read", "tool_input": {"path": "{home}/.cursor/hooks.json"}},
+      "cause": [".cursor/hooks.json"]
+    }
+  ]
+}
