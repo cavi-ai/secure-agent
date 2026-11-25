@@ -21,6 +21,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -101,7 +102,7 @@ func (a *API) handleFileDetail(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []model.FileAccess) model.FileDetail {
 	home := explainHome()
-	d := model.FileDetail{Path: p, Display: displayPath(p, home), Findings: findings, Accesses: accesses, Hits: []model.FileHit{}}
+	d := model.FileDetail{Path: p, Display: report.DisplayPath(p, home), Findings: findings, Accesses: accesses, Hits: []model.FileHit{}}
 	fi, statErr := os.Stat(p)
 	if statErr == nil {
 		d.Exists = true
@@ -139,7 +140,7 @@ func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []mode
 			workspace, repo = s.Workspace, s.Repo
 		}
 	}
-	d.Subject = explainSubject(ev, workspace, repo, home)
+	d.Subject = report.ExplainSubject(ev, workspace, repo, home)
 	if d.Exists && !fi.IsDir() && len(d.Hits) > 0 {
 		d.Excerpt, d.ExcerptWithheld = a.fileExcerpt(p, d.Hits)
 	}

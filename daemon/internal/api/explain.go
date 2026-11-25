@@ -34,22 +34,6 @@ var explainHome = func() string {
 	return h
 }
 
-// Finding wording and mute helpers live in package report.
-var (
-	evidenceOfKind     = report.EvidenceOfKind
-	firstNonEmpty      = report.FirstNonEmpty
-	readerName         = report.ReaderName
-	subjectEvidence    = report.SubjectEvidence
-	explainSubject     = report.ExplainSubject
-	displayPath        = report.DisplayPath
-	splitHostPort      = report.SplitHostPort
-	validMuteHost      = report.ValidMuteHost
-	validMuteAgent     = report.ValidMuteAgent
-	muteRuleHostAction = report.MuteRuleHostAction
-	muteClassAction    = report.MuteClassAction
-	muteAgentSuffix    = report.MuteAgentSuffix
-)
-
 // explainEnv is what an explanation reads besides the flag, resolved once
 // per request so a list costs one status probe and one session read per
 // session, not one per flag.
@@ -174,10 +158,10 @@ func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.Fla
 	if sess != nil && sess.Workspace != "" {
 		workspace = sess.Workspace
 	}
-	subject := subjectEvidence(f.Evidence)
+	subject := report.SubjectEvidence(f.Evidence)
 	var readTS time.Time
 	if subject != nil {
-		ex.Subject = explainSubject(*subject, workspace, report.RepoName(sess, workspace), env.home)
+		ex.Subject = report.ExplainSubject(*subject, workspace, report.RepoName(sess, workspace), env.home)
 		if subject.Kind == "read" {
 			readTS, _ = time.Parse(time.RFC3339, subject.TS)
 		}
@@ -207,7 +191,7 @@ func (a *API) explainEgress(f model.Flag, readTS time.Time, full bool) []model.E
 		if ev.Kind != "connect" || ev.Label == "" {
 			continue
 		}
-		host, port := splitHostPort(ev.Label)
+		host, port := report.SplitHostPort(ev.Label)
 		key := net.JoinHostPort(host, strconv.Itoa(port))
 		if host == "" || seen[key] {
 			continue
@@ -300,7 +284,7 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 	if act, ok := a.expectAction(f); ok && !f.Acknowledged {
 		acts = append(acts, act)
 	}
-	if read := evidenceOfKind(f, "read"); read != nil && filepath.IsAbs(read.Label) {
+	if read := report.EvidenceOfKind(f, "read"); read != nil && filepath.IsAbs(read.Label) {
 		acts = append(acts, model.ExplainAction{ID: "inspect-file", Label: "Inspect file details", Consequence: "Shows file metadata, recorded accesses, and supported .env variable names without values; changes nothing.", Method: http.MethodGet, Path: "/files/detail", Body: map[string]any{"path": read.Label}})
 	}
 	agent := f.Agent
@@ -343,15 +327,15 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 	}
 	if a.mutes != nil {
 		for _, eg := range hosts {
-			if !validMuteHost(eg.Host) {
+			if !report.ValidMuteHost(eg.Host) {
 				continue
 			}
-			if act, ok := muteRuleHostAction(f.Rule, title, eg.Host, agent); ok {
+			if act, ok := report.MuteRuleHostAction(f.Rule, title, eg.Host, agent); ok {
 				acts = append(acts, act)
 			}
 			break
 		}
-		if act, ok := muteClassAction(f.Rule, title, agent); ok {
+		if act, ok := report.MuteClassAction(f.Rule, title, agent); ok {
 			acts = append(acts, act)
 		}
 	}
@@ -376,7 +360,7 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 			body["started_at"] = ag.StartedAt
 		}
 		acts = append(acts, model.ExplainAction{
-			ID: "kill", Label: fmt.Sprintf("Kill %s (pid %d)", firstNonEmpty([]string{agent, ag.Name, "agent"}), f.PID),
+			ID: "kill", Label: fmt.Sprintf("Kill %s (pid %d)", report.FirstNonEmpty([]string{agent, ag.Name, "agent"}), f.PID),
 			Consequence: "The agent process tree is terminated now; unsaved work in it is lost.",
 			Method:      http.MethodPost, Path: "/kill",
 			Body: body,

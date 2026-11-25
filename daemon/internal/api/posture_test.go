@@ -379,9 +379,6 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	}
 }
 
-// timeAt returns a pointer to t, for optional time fields.
-func timeAt(t time.Time) *time.Time { return &t }
-
 // No agents running: an idle machine is not a blind monitor — silence is
 // legitimate, posture stays all-clear.
 func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {

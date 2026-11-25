@@ -11,18 +11,19 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // flagExpectedPattern is the expected-pattern entry a read-then-connect flag
 // stands for; false when its evidence does not record who read the file.
 func flagExpectedPattern(f model.Flag) (correlate.ExpectedPattern, bool) {
-	read, conn := evidenceOfKind(f, "read"), evidenceOfKind(f, "connect")
+	read, conn := report.EvidenceOfKind(f, "read"), report.EvidenceOfKind(f, "connect")
 	if f.Rule != readConnectRule || f.Agent == "" || read == nil || conn == nil {
 		return correlate.ExpectedPattern{}, false
 	}
 	toolRead := read.Sub == "agent tool read"
-	host, _ := splitHostPort(conn.Label)
+	host, _ := report.SplitHostPort(conn.Label)
 	if host == "" || (read.Exe == "" && !toolRead) {
 		return correlate.ExpectedPattern{}, false
 	}
@@ -42,7 +43,7 @@ func (a *API) expectAction(f model.Flag) (model.ExplainAction, bool) {
 	if !ok || a.expected == nil || a.expected.Has(p.Key) {
 		return model.ExplainAction{}, false
 	}
-	file := displayPath(p.Path, strings.TrimRight(explainHome(), "/"))
+	file := report.DisplayPath(p.Path, strings.TrimRight(explainHome(), "/"))
 	return model.ExplainAction{
 		ID: "expect", Label: "Expected: " + p.Reader + " → " + p.Dest,
 		Consequence: "Later reads of " + file + " by " + p.Reader + " followed by a connection to " + p.Dest +
@@ -240,7 +241,7 @@ func (a *API) flagFullyExpected(f model.Flag) bool {
 				continue
 			}
 			conns++
-			host, _ := splitHostPort(cm.Label)
+			host, _ := report.SplitHostPort(cm.Label)
 			if host == "" || !a.expected.Has(correlate.ReadConnectKey(f.Agent, reader, r.Label, correlate.DestLabel(host))) {
 				return false
 			}
@@ -262,11 +263,11 @@ func (a *API) nonSecretFileAction(f model.Flag) (model.ExplainAction, bool) {
 		if a.expected.Has(key) {
 			continue
 		}
-		conn := evidenceOfKind(f, "connect")
+		conn := report.EvidenceOfKind(f, "connect")
 		if conn == nil {
 			continue
 		}
-		host, _ := splitHostPort(conn.Label)
+		host, _ := report.SplitHostPort(conn.Label)
 		return model.ExplainAction{ID: "expect-file", Label: "Mark this .env as a test / non-secret file",
 			Consequence: "Exempt only " + read.Label + " for " + f.Agent + " from read/connect findings until revoked under Policy. This includes future contents and every destination. Use only for files that contain no real credentials. Other files and agents stay monitored; guard protection stays active.",
 			Method:      http.MethodPost, Path: "/expected", Body: map[string]any{"flag_id": f.ID, "scope": "file", "path": read.Label, "host": host}}, true

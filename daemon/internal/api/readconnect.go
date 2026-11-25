@@ -9,6 +9,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
 
 const readConnectRule = posture.ReadConnectRule
@@ -16,9 +17,9 @@ const readConnectRule = posture.ReadConnectRule
 // destinationOf is a connect item's org from the endpoint identity table,
 // its host when the org is unknown, and the host.
 func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
-	host, _ = splitHostPort(ev.Label)
+	host, _ = report.SplitHostPort(ev.Label)
 	org = hostid.IdentifyCached(host).Org
-	return firstNonEmpty([]string{org, host}), org, host
+	return report.FirstNonEmpty([]string{org, host}), org, host
 }
 
 // readConnectWhy is the reason a sensitive-read-then-connect flag needs a
@@ -26,12 +27,12 @@ func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
 // read and, when it does, why the connection still did not count as the
 // credential in use. Empty for evidence recorded before readers were.
 func readConnectWhy(f model.Flag) string {
-	read, conn := evidenceOfKind(f, "read"), evidenceOfKind(f, "connect")
+	read, conn := report.EvidenceOfKind(f, "read"), report.EvidenceOfKind(f, "connect")
 	if read == nil || conn == nil || read.PID == 0 {
 		return ""
 	}
 	dest, org, host := destinationOf(*conn)
-	file := displayPath(read.Label, strings.TrimRight(explainHome(), "/"))
+	file := report.DisplayPath(read.Label, strings.TrimRight(explainHome(), "/"))
 	switch {
 	case hostid.IdentifyCached(host).Class == "cloud":
 		return "A connection was observed to " + dest + " infrastructure near the read of " + file + ". The receiving service and whether secret bytes were sent are not established."
@@ -82,12 +83,12 @@ func patternDestinations(flags []model.Flag) []model.PatternDestination {
 	return capList(out, model.PatternListCap)
 }
 
-// patternReader is the reader readerName gives for most of the flags,
+// patternReader is the reader report.ReaderName gives for most of the flags,
 // empty when none names one.
 func patternReader(flags []model.Flag) string {
 	n := map[string]int{}
 	for _, f := range flags {
-		if name := readerName(evidenceOfKind(f, "read"), f.Agent); name != "" {
+		if name := report.ReaderName(report.EvidenceOfKind(f, "read"), f.Agent); name != "" {
 			n[name]++
 		}
 	}

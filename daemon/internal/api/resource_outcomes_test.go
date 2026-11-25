@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
@@ -41,11 +42,11 @@ func TestResourceReceiptReachesAPIAndSessionExport(t *testing.T) {
 	if len(result.Interventions) != 1 || result.Interventions[0].Status != "applied" || result.Interventions[0].Verification != "pending" {
 		t.Fatalf("lost bounded result: %+v", result.Interventions)
 	}
-	report, ok := testutil.Lookup[store.SessionReport](t)(st.SessionReport("owned"))
-	if !ok || len(report.Interventions) != 1 || report.Interventions[0].SessionID != "owned" {
-		t.Fatalf("lost session linkage: %+v", report.Interventions)
+	rep, ok := testutil.Lookup[store.SessionReport](t)(st.SessionReport("owned"))
+	if !ok || len(rep.Interventions) != 1 || rep.Interventions[0].SessionID != "owned" {
+		t.Fatalf("lost session linkage: %+v", rep.Interventions)
 	}
-	md := renderSessionMarkdown(report)
+	md := report.SessionMarkdown(rep)
 	if !strings.Contains(md, "application: applied · verification: pending") || !strings.Contains(md, "without freeing memory") {
 		t.Fatalf("unsupported exported outcome: %s", md)
 	}

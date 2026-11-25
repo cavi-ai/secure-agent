@@ -7,9 +7,6 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 )
 
-// renderSessionMarkdown is the session report's markdown renderer.
-var renderSessionMarkdown = report.SessionMarkdown
-
 // serveSessionReport serves what one session did — tools, models, spend,
 // files, hosts, guard decisions, findings, secret-rule hits and the opening
 // timeline — as JSON (default) or markdown. Read-level.
@@ -35,7 +32,7 @@ func (a *API) serveSessionReport(w http.ResponseWriter, r *http.Request, id stri
 	}
 	if format == "md" {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		_, _ = io.WriteString(w, renderSessionMarkdown(rep))
+		_, _ = io.WriteString(w, report.SessionMarkdown(rep))
 		return
 	}
 	writeJSON(w, rep)

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/report"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -41,7 +42,7 @@ func TestPayloadAssessmentUsesRequestGateNotRuleMode(t *testing.T) {
 		if reviewed := servedAssessment(t, a, f); reviewed["control"] != tc.control || reviewed["residual_risk"] != "transmission-attempt" {
 			t.Fatalf("review erased outcome: %+v", reviewed)
 		}
-		md := renderSessionMarkdown(store.SessionReport{Flags: []model.Flag{f}})
+		md := report.SessionMarkdown(store.SessionReport{Flags: []model.Flag{f}})
 		if !strings.Contains(md, "control: "+tc.control) || !strings.Contains(md, "transmission-attempt") || !strings.Contains(md, "reviewed") {
 			t.Fatalf("export omitted outcome: %s", md)
 		}
