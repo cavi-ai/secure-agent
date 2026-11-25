@@ -168,6 +168,10 @@ func TestLineageRootMustStillBeTheRecordedProcess(t *testing.T) {
 	tg := New(lineageConfig(), procs)
 	tg.Refresh()
 	noteAll(tg, forkChain())
+	assertJobIsClaude(t, tg)
+	if got := tg.TaggedPIDs()[900].RootPID; got != 500 {
+		t.Errorf("TaggedPIDs()[900].RootPID = %d before reuse, want 500", got)
+	}
 	procs[500] = ProcInfo{PID: 500, PPID: 1, Exe: "/bin/cat", StartTime: lineageStart.Add(10 * time.Minute)}
 	tg.Refresh()
 	info, ok := tg.Tag(900)
@@ -176,6 +180,36 @@ func TestLineageRootMustStillBeTheRecordedProcess(t *testing.T) {
 	}
 	if agent, known := tg.LiveAgentFamily(900); !agent || !known {
 		t.Fatalf("LiveAgentFamily(job) = (%v, %v), want (true, true)", agent, known)
+	}
+	if got := tg.TaggedPIDs()[900].RootPID; got != 900 {
+		t.Fatalf("TaggedPIDs()[900].RootPID = %d after reuse, want 900", got)
+	}
+}
+
+func TestLineageDescendantKeepsExitedRootIdentity(t *testing.T) {
+	procs := lineageProcs()
+	tg := New(lineageConfig(), procs)
+	tg.Refresh()
+	noteAll(tg, forkChain())
+	assertJobIsClaude(t, tg)
+
+	delete(procs, 500)
+	tg.Refresh()
+	procs[901] = ProcInfo{PID: 901, PPID: 1, Exe: "/bin/sleep", StartTime: lineageAt(6)}
+	tg.NoteLineage(Lineage{ParentPID: 900, ParentStart: jobStart, ChildPID: 901, ChildStart: lineageAt(6), At: lineageAt(6)})
+	if info, ok := tg.Tag(901); !ok || info.RootPID != 500 {
+		t.Fatalf("Tag(descendant) with exited root = %+v, %v; want root 500", info, ok)
+	}
+
+	procs[500] = ProcInfo{PID: 500, PPID: 1, Exe: "/bin/cat", StartTime: lineageAt(7)}
+	tg.Refresh()
+	if info, ok := tg.Tag(901); !ok || info.RootPID != 901 {
+		t.Fatalf("Tag(descendant) after root reuse = %+v, %v; want root 901", info, ok)
+	}
+	delete(procs, 500)
+	tg.Refresh()
+	if info, ok := tg.Tag(901); !ok || info.RootPID != 901 {
+		t.Fatalf("Tag(descendant) after the replacement exits = %+v, %v; want root 901", info, ok)
 	}
 }
 
@@ -191,16 +225,75 @@ func TestLineageFromExecRecordsAlone(t *testing.T) {
 	assertJobIsClaude(t, tg)
 }
 
+func TestLineageAgentExecSeedsFamilyWithoutARefresh(t *testing.T) {
+	procs := lineageProcs()
+	delete(procs, 500)
+	tg := New(lineageConfig(), procs)
+	tg.NoteLineage(Lineage{ParentPID: 1, ChildPID: 500, ChildStart: lineageStart, ExecPath: "/usr/local/bin/claude", At: lineageStart})
+	noteAll(tg, forkChain())
+	assertJobIsClaude(t, tg)
+}
+
+func TestLineageRootCanBeNewerThanTheLastSample(t *testing.T) {
+	procs := lineageProcs()
+	procs[500] = ProcInfo{PID: 500, PPID: 1, Exe: "/bin/cat", StartTime: lineageAt(-5)}
+	tg := New(lineageConfig(), procs)
+	tg.Refresh()
+	procs[500] = lineageProcs()[500]
+	tg.NoteLineage(Lineage{ParentPID: 1, ChildPID: 500, ChildStart: lineageStart, ExecPath: "/usr/local/bin/claude", At: lineageStart})
+	noteAll(tg, forkChain())
+	tg.Refresh()
+	assertJobIsClaude(t, tg)
+}
+
+func TestLineageOriginalParentUsesChildBirth(t *testing.T) {
+	for _, start := range []time.Time{jobStart, {}} {
+		procs := lineageProcs()
+		p := procs[500]
+		p.StartTime = lineageAt(5)
+		procs[500] = p
+		tg := New(lineageConfig(), procs)
+		tg.Refresh()
+		tg.NoteLineage(Lineage{ParentPID: 500, ChildPID: 900, ChildStart: start, OriginalParent: true, At: lineageAt(6)})
+		if info, ok := tg.Tag(900); ok {
+			t.Fatalf("Tag(job) with child start %v = %+v, want untagged", start, info)
+		}
+	}
+}
+
+func TestLineageExecPreservesVerifiedFork(t *testing.T) {
+	procs := lineageProcs()
+	procs[510] = ProcInfo{PID: 510, PPID: 1, Exe: "/usr/local/bin/claude", StartTime: lineageStart}
+	tg := New(lineageConfig(), procs)
+	tg.Refresh()
+	noteAll(tg, forkChain())
+	tg.NoteLineage(Lineage{ParentPID: 510, ChildPID: 900, ChildStart: jobStart, OriginalParent: true, At: lineageAt(6)})
+	assertJobIsClaude(t, tg)
+}
+
+func TestLiveAgentFamilyRecognizesAdoptedAncestor(t *testing.T) {
+	procs := lineageProcs()
+	procs[901] = ProcInfo{PID: 901, PPID: 900, Exe: "/bin/sleep", StartTime: lineageAt(6)}
+	tg := New(lineageConfig(), procs)
+	tg.Refresh()
+	noteAll(tg, forkChain())
+	if agent, known := tg.LiveAgentFamily(901); !agent || !known {
+		t.Fatalf("LiveAgentFamily(descendant) = (%v, %v), want (true, true)", agent, known)
+	}
+}
+
 // A parent named by pid alone carries its family only into records made
 // before a refresh found it gone.
 func TestLineageExecParentMustBeAliveAtTheRecord(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		at     time.Time
-		tagged bool
+		name     string
+		at       time.Time
+		original bool
+		tagged   bool
 	}{
-		{"exec before the shell was found gone", lineageAt(4), true},
-		{"exec after the shell was found gone", lineageAt(6), false},
+		{"exec before the shell was found gone", lineageAt(4), false, true},
+		{"exec after the shell was found gone", lineageAt(6), false, false},
+		{"original parent was alive at birth", lineageAt(6), true, true},
 	} {
 		now := lineageAt(0)
 		tg := New(lineageConfig(), lineageProcs())
@@ -209,7 +302,7 @@ func TestLineageExecParentMustBeAliveAtTheRecord(t *testing.T) {
 		tg.NoteLineage(Lineage{ParentPID: 500, ChildPID: 600, ChildStart: lineageAt(1), At: lineageAt(1)})
 		now = lineageAt(5)
 		tg.Refresh() // the shell is not listed: its record is marked exited at lineageAt(5)
-		tg.NoteLineage(Lineage{ParentPID: 600, ChildPID: 900, ChildStart: jobStart, At: c.at})
+		tg.NoteLineage(Lineage{ParentPID: 600, ChildPID: 900, ChildStart: jobStart, OriginalParent: c.original, At: c.at})
 		if info, ok := tg.Tag(900); ok != c.tagged || (ok && info.Name != "claude") {
 			t.Fatalf("%s: Tag(job) = %+v, %v; want tagged %v as claude", c.name, info, ok, c.tagged)
 		}

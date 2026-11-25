@@ -59,7 +59,8 @@ var (
 
 func sameLineage(a, b agents.Lineage) bool {
 	return a.ParentPID == b.ParentPID && a.ChildPID == b.ChildPID && a.ParentStart.Equal(b.ParentStart) &&
-		a.ChildStart.Equal(b.ChildStart) && a.At.Equal(b.At)
+		a.ChildStart.Equal(b.ChildStart) && a.At.Equal(b.At) && a.ParentExe == b.ParentExe &&
+		a.ExecPath == b.ExecPath && a.OriginalParent == b.OriginalParent
 }
 
 // A fork record names the forking process and its child, full or compacted,
@@ -70,7 +71,8 @@ func TestParseESLineForkIsLineageOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("fork line not compacted: %s", line)
 	}
-	want := agents.Lineage{ParentPID: 4242, ParentStart: esFullStart, ChildPID: 4243, ChildStart: esFullStart, At: esFullLineTime}
+	want := agents.Lineage{ParentPID: 4242, ParentStart: esFullStart, ParentExe: "/usr/local/bin/node",
+		ChildPID: 4243, ChildStart: esFullStart, At: esFullLineTime}
 	for name, l := range map[string][]byte{"full": line, "compact": compact} {
 		if e, ok := ParseESLine(l); ok {
 			t.Fatalf("%s fork line parsed to event %+v", name, e)
@@ -88,10 +90,11 @@ func TestParseESLineExecCarriesLineage(t *testing.T) {
 	for _, c := range []struct {
 		name, from, to   string
 		ppid, wantParent int32
+		original         bool
 	}{
-		{"same parent", "", "", 100, 100},
-		{"adopted by launchd", `"ppid":100,"original_ppid":100`, `"ppid":1,"original_ppid":4100`, 1, 4100},
-		{"no original_ppid", `,"original_ppid":100`, ``, 100, 100},
+		{"same parent", "", "", 100, 100, true},
+		{"adopted by launchd", `"ppid":100,"original_ppid":100`, `"ppid":1,"original_ppid":4100`, 1, 4100, true},
+		{"no original_ppid", `,"original_ppid":100`, ``, 100, 100, false},
 	} {
 		l := line
 		if c.from != "" {
@@ -102,7 +105,9 @@ func TestParseESLineExecCarriesLineage(t *testing.T) {
 		if v != esEvent || !reflect.DeepEqual(e, want) {
 			t.Fatalf("%s: exec event = %+v (%v), want %+v", c.name, e, v, want)
 		}
-		if wantL := (agents.Lineage{ParentPID: c.wantParent, ChildPID: 4242, ChildStart: esFullStart, At: esFullLineTime}); !sameLineage(got, wantL) {
+		wantL := agents.Lineage{ParentPID: c.wantParent, ChildPID: 4242, ChildStart: esFullStart,
+			At: esFullLineTime, ExecPath: "/usr/bin/git", OriginalParent: c.original}
+		if !sameLineage(got, wantL) {
 			t.Fatalf("%s: exec lineage = %+v, want %+v", c.name, got, wantL)
 		}
 	}

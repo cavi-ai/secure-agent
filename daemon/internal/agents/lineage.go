@@ -7,14 +7,18 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
 
-// Lineage is one parent-child pair the kernel reported at At: a fork, or the
-// parent of a process that exec'd. A zero start time was not in the record.
+// Lineage is a fork or exec observation from Endpoint Security. A zero start
+// time was not in the record.
 type Lineage struct {
 	ParentPID   int32
 	ParentStart time.Time
+	ParentExe   string
 	ChildPID    int32
 	ChildStart  time.Time
+	ExecPath    string
 	At          time.Time
+	// OriginalParent means ParentPID names the child's parent at birth.
+	OriginalParent bool
 }
 
 // lineageRetention is how long an exited process's record still names the
@@ -32,6 +36,10 @@ type lineageRecord struct {
 	kind      string
 	rootPID   int32
 	rootStart time.Time
+	// Once the root PID has been reused, it cannot name this family again.
+	rootReused bool
+	// exact marks a verified fork or direct executable match for this process.
+	exact bool
 	// start is the process's start time, zero when the record lacked it; at
 	// is the record's time.
 	start time.Time
@@ -64,67 +72,107 @@ func (t *Tagger) expiredLocked(r lineageRecord) bool {
 	return !r.gone.IsZero() && t.now().Sub(r.gone) > lineageRetention
 }
 
-// NoteLineage records that l.ChildPID joined its parent's agent family: the
-// parent is tagged, or holds a record that is still that process's. A parent
-// in no family stores nothing and reads no process source.
+// NoteLineage records a child's family from the parent or from a matching
+// executable the kernel observed, even before the first process refresh.
 func (t *Tagger) NoteLineage(l Lineage) {
-	if l.ParentPID <= 0 || l.ChildPID <= 0 || l.ParentPID == l.ChildPID {
+	if l.ChildPID <= 0 {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	fam, ok := t.familyOfLocked(l.ParentPID, l.ParentStart, l.At)
-	if !ok {
+
+	prior, held := t.lineage[l.ChildPID]
+	if held && !l.ChildStart.IsZero() && prior.start.After(l.ChildStart) && !sameStart(prior.start, l.ChildStart) {
+		return // A replay for an older occupant must not replace the child's record.
+	}
+	var fam lineageRecord
+	parentAt := l.At
+	if l.OriginalParent {
+		parentAt = l.ChildStart
+	}
+	if l.ParentPID > 0 && l.ParentPID != l.ChildPID && !parentAt.IsZero() {
+		fam = t.familyOfLocked(l.ParentPID, l.ParentStart, parentAt)
+		if observed, ok := t.observedFamilyLocked(l.ParentPID, l.ParentStart, l.ParentExe); ok && observed.name != fam.name {
+			fam = observed
+		}
+	}
+
+	executed, matched := t.observedFamilyLocked(l.ChildPID, l.ChildStart, l.ExecPath)
+	if held && prior.exact && (l.ChildStart.IsZero() || prior.of(l.ChildStart)) &&
+		l.ParentStart.IsZero() && (!matched || executed.name == prior.name) {
+		return // An inferred exec parent cannot replace a verified family.
+	}
+	fam.exact = !l.ParentStart.IsZero() && !l.ChildStart.IsZero()
+	if matched && executed.name != fam.name {
+		fam = executed
+		fam.exact = true
+	}
+	if fam.rootPID <= 0 {
 		return
 	}
+	if fam.rootPID == prior.rootPID && sameStart(fam.rootStart, prior.rootStart) {
+		fam.rootReused = fam.rootReused || prior.rootReused
+	}
+	fam.rootReused = fam.rootReused || t.rootReusedLocked(fam.rootPID, fam.rootStart)
 	fam.start, fam.at, fam.gone = l.ChildStart, l.At, time.Time{}
-	if _, held := t.lineage[l.ChildPID]; !held {
+	if !held {
 		t.makeRoomLocked()
 	}
 	t.lineage[l.ChildPID] = fam
-	if _, cached := t.cache[l.ChildPID]; cached && !t.tagged[l.ChildPID] {
+	if info, cached := t.cache[l.ChildPID]; cached && (!t.tagged[l.ChildPID] ||
+		(fam.of(info.StartedAt) && (info.fromLineage || (matched && info.Name != fam.name)))) {
 		delete(t.cache, l.ChildPID)
 		delete(t.tagged, l.ChildPID)
 	}
 }
 
-// familyOfLocked returns the family of the process that held pid at time
-// at, started at start when that is known: its tag, else its record.
-func (t *Tagger) familyOfLocked(pid int32, start, at time.Time) (lineageRecord, bool) {
-	if info, ok := t.cache[pid]; ok && t.tagged[pid] {
-		s := info.StartedAt
-		if s.IsZero() || (start.IsZero() && !s.After(at)) || (!start.IsZero() && sameStart(s, start)) {
-			root := info.RootPID
-			if root <= 0 {
-				root = pid
-			}
-			return lineageRecord{name: info.Name, kind: info.Kind, rootPID: root, rootStart: t.startOfLocked(root, pid, s)}, true
-		}
-	}
-	r, ok := t.lineage[pid]
-	if !ok || t.expiredLocked(r) {
+// observedFamilyLocked recognizes the executable of a known process
+// generation. Node programs also need the entry point from that process.
+func (t *Tagger) observedFamilyLocked(pid int32, start time.Time, exe string) (lineageRecord, bool) {
+	if start.IsZero() || exe == "" {
 		return lineageRecord{}, false
 	}
-	if !start.IsZero() {
-		return r, r.of(start)
+	p := ProcInfo{Exe: exe}
+	if nodeExecutable(exe) && slices.ContainsFunc(t.cfg.Agents, func(d config.AgentDef) bool { return d.Name == "openclaw" }) {
+		if live, ok := t.ps.Info(pid); ok && sameStart(live.StartTime, start) && live.Exe == exe {
+			p.RuntimeProgram, p.Comm = live.RuntimeProgram, live.Comm
+		}
 	}
-	// Named by pid alone: the process listed under it if that one had started
-	// by then, else the record's process if it had started and not exited.
-	if p, listed := t.table[pid]; listed && !p.StartTime.IsZero() && !p.StartTime.After(at) {
-		return r, r.of(p.StartTime)
-	}
-	return r, (r.start.IsZero() || !r.start.After(at)) && (r.gone.IsZero() || !r.gone.Before(at))
+	def, ok := t.matchLocked(p)
+	return lineageRecord{name: def.Name, kind: config.NormalizeAgentKind(def.Kind), rootPID: pid, rootStart: start}, ok
 }
 
-// startOfLocked is the start time of root, a tagged process's family root.
-func (t *Tagger) startOfLocked(root, pid int32, pidStart time.Time) time.Time {
-	if root == pid {
-		return pidStart
+// familyOfLocked looks up the parent at the observation time. A matching
+// record carries the original root identity even after the root exits.
+func (t *Tagger) familyOfLocked(pid int32, start, at time.Time) lineageRecord {
+	if start.IsZero() {
+		p := t.table[pid]
+		if !p.StartTime.IsZero() && !p.StartTime.After(at) {
+			start = p.StartTime
+		}
 	}
-	if info, ok := t.cache[root]; ok && t.tagged[root] {
-		return info.StartedAt
+	if r, ok := t.lineage[pid]; ok && !t.expiredLocked(r) {
+		if !start.IsZero() {
+			if r.of(start) {
+				return r
+			}
+		} else {
+			s := r.start
+			if s.IsZero() {
+				s = r.at
+			}
+			if !s.IsZero() && !s.After(at) && (r.gone.IsZero() || !r.gone.Before(at)) {
+				return r
+			}
+		}
 	}
-	return t.table[root].StartTime
+	if info, ok := t.cache[pid]; ok && t.tagged[pid] {
+		s := info.StartedAt
+		if !s.IsZero() && (sameStart(s, start) || (start.IsZero() && !s.After(at))) {
+			return lineageRecord{name: info.Name, kind: info.Kind, rootPID: info.RootPID, rootStart: info.rootStart, rootReused: info.rootReused}
+		}
+	}
+	return lineageRecord{}
 }
 
 // makeRoomLocked keeps the records under lineageCap: expired records go
@@ -166,19 +214,19 @@ func (t *Tagger) makeRoomLocked() {
 // lists as exited and drops them after lineageRetention. Callers hold t.mu.
 func (t *Tagger) pruneLineageLocked(at time.Time) {
 	for pid, r := range t.lineage {
-		if p, ok := t.table[pid]; ok && r.of(p.StartTime) {
-			if !r.gone.IsZero() {
-				r.gone = time.Time{}
-				t.lineage[pid] = r
-			}
-			continue
-		}
+		previous := r
+		r.rootReused = r.rootReused || t.rootReusedLocked(r.rootPID, r.rootStart)
 		switch {
+		case r.of(t.table[pid].StartTime):
+			r.gone = time.Time{}
 		case r.gone.IsZero():
 			r.gone = at
-			t.lineage[pid] = r
 		case at.Sub(r.gone) > lineageRetention:
 			delete(t.lineage, pid)
+			continue
+		}
+		if r != previous {
+			t.lineage[pid] = r
 		}
 	}
 }
@@ -208,23 +256,44 @@ func (t *Tagger) lineageTagLocked(pid int32, self ProcInfo) (AgentInfo, bool) {
 	if exe == "" {
 		exe = self.Comm
 	}
-	// Another process holding the root's pid roots the tag at the process itself.
-	root, chain := r.rootPID, []int32{pid, r.rootPID}
-	if p, listed := t.table[r.rootPID]; listed && !r.rootStart.IsZero() && !sameStart(p.StartTime, r.rootStart) {
-		root, chain = pid, []int32{pid}
+	chain := []int32{pid}
+	if r.rootPID != pid {
+		chain = append(chain, r.rootPID)
 	}
 	return AgentInfo{
-		Name:      r.name,
-		Kind:      r.kind,
-		ExePath:   exe,
-		CWD:       self.CWD,
-		PID:       pid,
-		PPID:      self.PPID,
-		Chain:     chain,
-		StartedAt: self.StartTime,
-		RSSBytes:  self.RSSBytes,
-		CPUTime:   self.CPUTime,
-		RootPID:   root,
-		sampledAt: t.now(),
+		Name:        r.name,
+		Kind:        r.kind,
+		ExePath:     exe,
+		CWD:         self.CWD,
+		PID:         pid,
+		PPID:        self.PPID,
+		Chain:       chain,
+		StartedAt:   self.StartTime,
+		RSSBytes:    self.RSSBytes,
+		CPUTime:     self.CPUTime,
+		RootPID:     r.rootPID,
+		rootStart:   r.rootStart,
+		rootReused:  r.rootReused,
+		fromLineage: true,
+		sampledAt:   t.now(),
 	}, true
+}
+
+func (t *Tagger) rootReusedLocked(pid int32, start time.Time) bool {
+	if start.IsZero() {
+		return false
+	}
+	p := t.table[pid]
+	// The last sample can predate the record. Only a later occupant proves reuse.
+	return p.StartTime.After(start) && !sameStart(p.StartTime, start)
+}
+
+// rootedInfoLocked presents a safe root to callers without replacing the
+// cached identity that later lineage records need to inherit.
+func (t *Tagger) rootedInfoLocked(info AgentInfo) AgentInfo {
+	info.rootReused = info.rootReused || t.rootReusedLocked(info.RootPID, info.rootStart)
+	if info.rootReused {
+		info.RootPID, info.rootStart, info.Chain = info.PID, info.StartedAt, []int32{info.PID}
+	}
+	return info
 }

@@ -217,7 +217,7 @@ func parseESLine(line []byte) (event.Event, agents.Lineage, esLineVerdict) {
 	// A fork record only names a parent and child for agent attribution.
 	if f := env.Event.Fork; f != nil {
 		return event.Event{}, agents.Lineage{ParentPID: pid, ParentStart: env.Process.started(),
-			ChildPID: f.Child.pid(), ChildStart: f.Child.started(), At: ts}, esLineage
+			ParentExe: exe, ChildPID: f.Child.pid(), ChildStart: f.Child.started(), At: ts}, esLineage
 	}
 
 	var kind event.Kind
@@ -238,11 +238,11 @@ func parseESLine(line []byte) (event.Event, agents.Lineage, esLineVerdict) {
 		kind = event.KindExec
 		filePath = env.Event.Exec.Target.Executable.Path
 		// The forking parent: original_ppid survives launchd adopting the process.
-		parent := ppid
-		if op := env.Process.OriginalPPID; op > 1 {
-			parent = op
+		lineage = agents.Lineage{ParentPID: ppid, ChildPID: pid, ChildStart: env.Process.started(), At: ts, ExecPath: filePath}
+		if env.Process.OriginalPPID > 1 {
+			lineage.ParentPID = env.Process.OriginalPPID
+			lineage.OriginalParent = true
 		}
-		lineage = agents.Lineage{ParentPID: parent, ChildPID: pid, ChildStart: env.Process.started(), At: ts}
 	} else if env.Event.Unlink != nil {
 		kind = event.KindFileDelete
 		filePath = env.Event.Unlink.Target.Path

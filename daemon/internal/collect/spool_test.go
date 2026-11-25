@@ -652,15 +652,15 @@ func TestSpoolTailerFeedsLineageToTheTagger(t *testing.T) {
 		500:  {PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent", StartTime: start},
 		4303: {PID: 4303, PPID: 1, Exe: "/bin/sleep", StartTime: start},
 	})
-	tg.Refresh()
-	fork := func(parent, parentPPID, child int) string {
-		return `{"event_type":11,"process":` + esFullProcess(parent, parentPPID, "/bin/zsh") +
+	fork := func(parent, parentPPID, child int, exe string) string {
+		return `{"event_type":11,"process":` + esFullProcess(parent, parentPPID, exe) +
 			`,"event":{"fork":{"child":` + esFullProcess(child, parent, "/bin/zsh") + `}},"time":"2026-11-01T03:31:59.123456789Z"}`
 	}
 	exec := `{"event_type":9,"process":` + strings.Replace(esFullProcess(4303, 1, "/bin/zsh"), `"original_ppid":1`, `"original_ppid":4302`, 1) +
 		`,"event":{"exec":{"target":` + esFullProcess(4303, 1, "/bin/sleep") + `}},"time":"2026-11-01T03:31:59.223456789Z"}`
 	path := t.TempDir() + "/spool.jsonl"
-	appendSpool(t, path, fork(500, 1, 4301)+"\n"+fork(4301, 500, 4302)+"\n"+fork(4302, 4301, 4303)+"\n"+exec+"\n")
+	appendSpool(t, path, fork(500, 1, 4301, "/usr/local/bin/cursor-agent")+"\n"+
+		fork(4301, 500, 4302, "/bin/zsh")+"\n"+fork(4302, 4301, 4303, "/bin/zsh")+"\n"+exec+"\n")
 	b := bus.New(64)
 	sub := b.Subscribe()
 	tailer := NewSpoolTailerAt(b, path)
