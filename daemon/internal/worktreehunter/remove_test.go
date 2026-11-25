@@ -94,10 +94,10 @@ func TestRemoveOnlyOnFreshRemoveVerdict(t *testing.T) {
 			}
 		}
 	}
-	if rm := rep.Removals[merged]; !rep.Refreshing || rm.State != RemovalRemoved || rm.Branch != "feat/merged" || rm.FinishedAt == nil {
-		t.Fatalf("after removal: refreshing=%v removal=%+v", rep.Refreshing, rm)
+	if rm := rep.Removals[merged]; !rep.Cached || rm.State != RemovalRemoved || rm.Branch != "feat/merged" || rm.FinishedAt == nil {
+		t.Fatalf("after removal: cached=%v removal=%+v", rep.Cached, rm)
 	}
-	h.bgWG.Wait()
+	h.Wait()
 }
 
 func TestPrune(t *testing.T) {

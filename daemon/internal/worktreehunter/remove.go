@@ -142,46 +142,13 @@ func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, rev
 	return row, nil
 }
 
-// dropRow takes a removed worktree out of the cached scan, with the group
-// and error line of a missing repository it leaves empty, and marks the
-// scan old, so the next report answers without it while a background
-// rescan confirms.
-func (h *Hunter) dropRow(path string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.cached == nil {
-		return
-	}
-	rep := *h.cached
-	rep.Repos = nil
-	gone := map[string]bool{}
-	for _, r := range h.cached.Repos {
-		kept := make([]Worktree, 0, len(r.Worktrees))
-		for _, w := range r.Worktrees {
-			if w.Path != path {
-				kept = append(kept, w)
-			}
-		}
-		if r.Error == ErrRepoMissing && len(kept) == 0 {
-			gone[r.Path] = true
-			continue
-		}
-		r.Worktrees = kept
-		rep.Repos = append(rep.Repos, r)
-	}
-	rep.Errors = nil
-	for _, e := range h.cached.Errors {
-		if repo, _, _ := strings.Cut(e, ": "); !gone[repo] {
-			rep.Errors = append(rep.Errors, e)
-		}
-	}
-	rep.Summary = summarize(rep.Repos)
-	h.cached, h.cachedAt = &rep, time.Time{}
-}
+// dropRow takes a removed worktree out of the cached scan; the scan keeps
+// its time, so the next report answers from it without the row.
+func (h *Hunter) dropRow(path string) { h.dropFromCache(map[string]bool{path: true}, nil) }
 
 // Prune runs `git worktree prune` in the repository containing repo when it
 // lists at least one unlocked worktree whose directory is gone, and returns
-// those paths.
+// those paths. It takes their rows out of the cached scan.
 func (h *Hunter) Prune(ctx context.Context, repo string) ([]string, error) {
 	if !filepath.IsAbs(repo) {
 		return nil, errors.New("path must be absolute")
@@ -218,7 +185,11 @@ func (h *Hunter) Prune(ctx context.Context, repo string) ([]string, error) {
 	for _, p := range gone {
 		h.st.PutCleanup(model.CleanupEntry{TS: h.now(), Action: "worktree-prune", Path: p, Repo: ref.Main, Detail: "directory was already gone"})
 	}
-	h.invalidate()
+	pruned := map[string]bool{}
+	for _, p := range gone {
+		pruned[p] = true
+	}
+	h.dropFromCache(pruned, nil)
 	return gone, nil
 }
 

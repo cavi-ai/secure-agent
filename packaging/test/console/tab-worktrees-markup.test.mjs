@@ -185,7 +185,7 @@ const expected = {
     + savedAdvice('', `<p class="wt-ask wt-ask-answered"><b>Asked ${E}:</b> ${E} — ${E} (session $0.50)</p>`) + '\n    </div>\n    \n  </details>',
   'row waiting on agent': rowHead('keep', 'open', '', '', 'keep', 'waiting for the owning agent to finish', '', '<span class="wt-size">Measuring…</span>')
     + `</div></div>\n      <section class="wt-scan-checks"><h5>Scan checks</h5>\n      ${sessionFact}\n      \n      <ul class="wt-reasons wt-reason-tags" role="list"><li class="wt-reason">${E}</li></ul>\n      ${reviewHint}\n      ${resolve('')}\n      </section>\n      <div class="wt-actions">${openButton(E)}${askButton(' disabled')}${adviseButton}${discussButton}</div>\n      `
-    + savedAdvice('', `<p class="wt-ask wt-ask-running"><b>Asked ${E}:</b> waiting for ${E}&#39;s answer…</p>`) + '\n    </div>\n    \n  </details>',
+    + savedAdvice('', `<p class="wt-ask wt-ask-running"><b>Asked ${E}:</b> waiting for ${E}&#39;s answer as of the last read; Reload shows it</p>`) + '\n    </div>\n    \n  </details>',
   'row unknown state': rowHead(E, 'open', '', '', 'info', E, '', '<span class="wt-size">Measuring…</span>')
     + `</div></div>\n      <section class="wt-scan-checks"><h5>Scan checks</h5>\n      ${sessionFact}\n      \n      \n      \n      ${resolve('this row cannot be marked for removal')}\n      </section>\n      <div class="wt-actions">${openButton(E)}${discussButton}</div>\n      \n    </div>\n    \n  </details>`,
   'group with options': repoHead(`<span class="wt-repo-meta">${E} · ${E}</span>\n        <span class="wt-repo-size">4 KB</span>`, repoOptions(1)) + prunedRow + '\n  </section>',

@@ -76,7 +76,7 @@ func TestWorktreesWithSubmodules(t *testing.T) {
 	if strings.Contains(run(t, f.main, "worktree", "list", "--porcelain"), clean) {
 		t.Fatal("git still lists the removed worktree")
 	}
-	h.bgWG.Wait()
+	h.Wait()
 }
 
 func TestReviewedSubmoduleRemoval(t *testing.T) {

@@ -303,37 +303,6 @@
       rep.summary.review--;
       return { status: 'ok', result: { path: body.path, bytes: 1258291, trash_path: '/Users/dev/.Trash/evidence' } };
     }
-    if (p === '/worktrees/remove') {
-      if (scenarios.has('removecadence')) window.__removePostedAt = Date.now();
-      // The daemon removes in the background: running now, the outcome
-      // lands in GET /worktrees removals (removerunning: never finishes;
-      // removefaildemo: git fails).
-      const rep = data['/worktrees'];
-      const running = { path: body.path, state: 'running', phase: 'deleting', step: 'deleting', started_at: iso(0), step_at: iso(0),
-        bytes: 1610612736, files: 184203 };
-      rep.removals = { ...(rep.removals || {}), [body.path]: running };
-      if (!scenarios.has('removerunning')) {
-        setTimeout(() => {
-          if (scenarios.has('removefaildemo')) {
-            rep.removals[body.path] = { ...running, state: 'failed', step: '', finished_at: iso(0),
-              error: 'git worktree: <b>fatal</b> could not remove (the worktree is still on disk and registered with git)' };
-            return;
-          }
-          const size = 1610612736;
-          for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
-          Object.assign(rep.summary, { worktrees: rep.summary.worktrees - 1, remove: rep.summary.remove - 1,
-            size_bytes: rep.summary.size_bytes - size, removable_bytes: rep.summary.removable_bytes - size });
-          rep.repos[0].size_bytes -= size;
-          Object.assign(rep.reclaimed, { bytes: rep.reclaimed.bytes + size, count: rep.reclaimed.count + 1,
-            bytes_30d: rep.reclaimed.bytes_30d + size, count_30d: rep.reclaimed.count_30d + 1 });
-          bookCleanup({ ts: new Date().toISOString(), action: 'worktree-remove', path: body.path, repo: WT_REPO, bytes: size,
-            detail: 'branch kept; merged into origin/main (squash)' });
-          rep.removals[body.path] = { ...running, state: 'removed', phase: '', step: '', step_at: undefined, bytes: size,
-            branch: body.path.split('/').pop() === 'done' ? 'feat/done' : 'feat/' + body.path.split('/').pop(), finished_at: iso(0) };
-        }, 2000);
-      }
-      return { status: 'accepted', removal: running };
-    }
     if (p === '/allowlist' && opts && opts.method === 'DELETE') {
       data['/allowlist'] = data['/allowlist'].filter(x => !(x.agent === body.agent && x.host === body.host));
       return { status: 'ok' };
@@ -731,6 +700,36 @@
         await new Promise(resolve => setTimeout(resolve, 600));
         if (scenarios.has('attentionfail')) return {ok:false,status:503,text:async()=> 'Fixture write failed'};
       }
+      // A removal answers in its own request once it is done: the row and
+      // its size leave the report and the cleanup is booked
+      // (removerunning: never answers; removefaildemo: git fails).
+      if (p === '/worktrees/remove') {
+        const body = JSON.parse(opts.body || '{}');
+        const rep = data['/worktrees'];
+        const running = { path: body.path, state: 'running', phase: 'deleting', step: 'deleting', started_at: iso(0), step_at: iso(0),
+          bytes: 1610612736, files: 184203 };
+        rep.removals = { ...(rep.removals || {}), [body.path]: running };
+        if (scenarios.has('removerunning')) return new Promise(() => {});
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (scenarios.has('removefaildemo')) {
+          const error = 'git worktree: <b>fatal</b> could not remove (the worktree is still on disk and registered with git)';
+          rep.removals[body.path] = { ...running, state: 'failed', step: '', finished_at: iso(0), error };
+          return { ok: false, status: 500, text: async () => error };
+        }
+        const size = 1610612736;
+        for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
+        Object.assign(rep.summary, { worktrees: rep.summary.worktrees - 1, remove: rep.summary.remove - 1,
+          size_bytes: rep.summary.size_bytes - size, removable_bytes: rep.summary.removable_bytes - size });
+        rep.repos[0].size_bytes -= size;
+        Object.assign(rep.reclaimed, { bytes: rep.reclaimed.bytes + size, count: rep.reclaimed.count + 1,
+          bytes_30d: rep.reclaimed.bytes_30d + size, count_30d: rep.reclaimed.count_30d + 1 });
+        bookCleanup({ ts: new Date().toISOString(), action: 'worktree-remove', path: body.path, repo: WT_REPO, bytes: size,
+          detail: 'branch kept; merged into origin/main (squash)' });
+        const branch = 'feat/' + body.path.split('/').pop();
+        rep.removals[body.path] = { ...running, state: 'removed', phase: '', step: '', step_at: undefined, bytes: size, branch, finished_at: iso(0) };
+        const out = { status: 'ok', removed: body.path, branch, reasons: [], bytes: size, bytes_partial: false };
+        return { ok: true, status: 200, json: async () => out, text: async () => JSON.stringify(out) };
+      }
       const out = handlePost(p, opts, String(path));
       return {
         ok: true, status: 200,
@@ -875,16 +874,9 @@
         '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
     }
-    // removecadence: the gap between starting a removal and the next
     if (scenarios.has('incidentremediation') && p === '/incidents' && new URLSearchParams(String(path).split('?')[1] || '').get('id')) {
       const incident = data['/incidents'][0];
       return {ok:true,status:200,json:async()=>({incident,workflow:incident.workflow || {status:'open'}})};
-    }
-    // removecadence: the gap between starting a removal and the next
-    // /worktrees read lands on <pre id="remove-cadence">.
-    if (scenarios.has('removecadence') && p === '/worktrees' && window.__removePostedAt && !window.__removeGap) {
-      window.__removeGap = Date.now() - window.__removePostedAt;
-      stamp('remove-cadence', String(window.__removeGap));
     }
     if (p === '/expected-egress' && !opts.method && (scenarios.has('contextread') || scenarios.has('contextmissing') || scenarios.has('contextfail'))) {
       contextRuleReads++;
@@ -2372,7 +2364,7 @@
     }, 4000);
   }
   // refreshdemo: the first /worktrees and /cleanup answer from an old cached
-  // scan while the daemon rescans; the tab must re-read until it lands.
+  // scan; the worktrees tab shows it and reads again only on Reload.
   if (scenarios.has('refreshdemo')) {
     const freshW = data['/worktrees'];
     const oldW = JSON.parse(JSON.stringify(freshW));
@@ -2386,7 +2378,7 @@
     Object.defineProperty(data, '/cleanup', { get: () => (cReads++ === 0 ? oldC : freshC) });
   }
   // sizingdemo: the first /worktrees answers still sizing with no sizes;
-  // the tab must re-read until the sizes land.
+  // the tab shows that and reads again only on Reload.
   if (scenarios.has('sizingdemo')) {
     const sized = data['/worktrees'];
     const pending = JSON.parse(JSON.stringify(sized));
@@ -2574,28 +2566,6 @@
       const btn = document.querySelector('#worktrees-container [data-action="worktree-discuss-all"]');
       if (btn) btn.click();
     }, 9000);
-  }
-  // removecadence: sizes never land, so a 5 s re-read is always pending;
-  // Remove is clicked right after one. The removal's first re-read must
-  // come on its own 1.5 s cadence, not the pending 5 s one.
-  if (scenarios.has('removecadence')) {
-    const rep = data['/worktrees'];
-    rep.sizing = true;
-    let clicked = false;
-    let reads = 0;
-    const orig = Object.getOwnPropertyDescriptor(data, '/worktrees');
-    Object.defineProperty(data, '/worktrees', { configurable: true, get: () => {
-      reads++;
-      if (reads === 2 && !clicked) {
-        clicked = true;
-        setTimeout(() => {
-          const btn = document.querySelector('#worktrees-container [data-action="worktree-remove"]');
-          if (btn) btn.click();
-          confirmNext();
-        }, 50);
-      }
-      return orig && orig.get ? orig.get() : rep;
-    } });
   }
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (scenarios.has('demotedemo')) {

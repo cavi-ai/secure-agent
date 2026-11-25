@@ -16,9 +16,9 @@ for (const f of ['lib.js', 'tab-worktrees.js']) {
 }
 const { worktreeGroupAskText } = ctx;
 test('worktreeGroupAskText: how many rows, one at a time, and how many were left out', () => {
-  assert.equal(worktreeGroupAskText({ rows: 3, skipped: 0 }), 'Asking the advisor about 3 worktrees, one at a time — notes appear under each row as it answers');
-  assert.equal(worktreeGroupAskText({ rows: 1 }), 'Asking the advisor about 1 worktree, one at a time — notes appear under each row as it answers');
-  assert.equal(worktreeGroupAskText({ rows: 40, skipped: 3 }), 'Asking the advisor about 40 worktrees, one at a time — notes appear under each row as it answers (3 more not asked: 40 at a time)');
+  assert.equal(worktreeGroupAskText({ rows: 3, skipped: 0 }), 'Asking the advisor about 3 worktrees, one at a time — Reload shows each note under its row once it answers');
+  assert.equal(worktreeGroupAskText({ rows: 1 }), 'Asking the advisor about 1 worktree, one at a time — Reload shows each note under its row once it answers');
+  assert.equal(worktreeGroupAskText({ rows: 40, skipped: 3 }), 'Asking the advisor about 40 worktrees, one at a time — Reload shows each note under its row once it answers (3 more not asked: 40 at a time)');
 });
 const { worktreeLaneCounts, worktreeLane, worktreeLanesHTML, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
   clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText,
@@ -302,7 +302,7 @@ test('summary: "N shown" appears when the panel filter or the header search hide
   assert.equal(worktreesSummaryText(rep), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s');
   assert.equal(worktreesSummaryText(rep, undefined, 1), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 1 shown');
   assert.equal(worktreesSummaryText(rep, undefined, 0), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 0 shown');
-  assert.equal(worktreesSummaryText({ ...rep, refreshing: true }, undefined, 2), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 2 shown · refreshing…');
+  assert.equal(worktreesSummaryText({ ...rep, refreshing: true }, undefined, 2), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s · 2 shown · sizes still being measured; Reload shows them');
   // The pill counts stay the report's, whatever the search leaves.
   assert.equal(worktreeLaneCounts(rep).all, 4);
 });
@@ -398,7 +398,7 @@ test('worktreeFilterHTML and summary line', () => {
   assert.equal(worktreesSummaryText({ ...report(), cached: true }), '2 repos · 4 worktrees · stale after 14 idle days · cached scan');
   const at = Date.parse('2026-09-25T12:00:00Z');
   assert.equal(worktreesSummaryText({ ...report(), cached: true, generated_at: '2026-09-25T11:48:00Z', refreshing: true }, at),
-    '2 repos · 4 worktrees · stale after 14 idle days · scanned 12m ago · refreshing…');
+    '2 repos · 4 worktrees · stale after 14 idle days · scanned 12m ago · sizes still being measured; Reload shows them');
 });
 
 test('advisor notes remain secondary, escaped, and never change removal eligibility', () => {
@@ -579,7 +579,7 @@ test('agent asks: status line under the row, escaped; Ask <harness> disabled whi
     { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://x/pull/<9>', cost_usd: 0.21 });
   assert.ok(answered.includes('<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://x/pull/&lt;9&gt; (session $0.21)</p>'));
   const running = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'running' }, null, 'codex');
-  assert.ok(running.includes("waiting for codex&#39;s answer…") || running.includes("waiting for codex's answer…"));
+  assert.ok(running.includes("waiting for codex&#39;s answer as of the last read; Reload shows it") || running.includes("waiting for codex's answer as of the last read; Reload shows it"));
   assert.match(running, /data-action="worktree-ask" data-path="[^"]+" title="Ask active codex agent" disabled>Ask codex<\/button>/);
   const failed = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'timeout', verdict: 'none', detail: 'no answer within 15m0s' });
   assert.ok(failed.includes('wt-ask-timeout') && failed.includes('timeout — no answer within 15m0s'));

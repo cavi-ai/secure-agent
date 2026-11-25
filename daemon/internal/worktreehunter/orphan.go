@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -67,7 +66,8 @@ func orphanAt(path string) (orphanDir, bool) {
 }
 
 // Reconnect runs `git worktree repair` in the repository that still
-// records the orphan at path and returns that repository.
+// records the orphan at path and returns that repository. It drops the
+// cached scan, so the next report scans once.
 func (h *Hunter) Reconnect(ctx context.Context, path string) (string, error) {
 	defer h.lockForAction(nil)()
 	o, ok := orphanAt(path)
@@ -91,7 +91,7 @@ func (h *Hunter) Reconnect(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("git worktree repair ran in %s but %s is still not linked", repo, o.Path)
 	}
 	h.st.PutAudit(store.AuditEntry{Action: "worktree-reconnect", Detail: fmt.Sprintf("path=%s repo=%s", o.Path, repo)})
-	h.markStale()
+	h.invalidate()
 	return repo, nil
 }
 
@@ -142,12 +142,4 @@ func (h *Hunter) ListedPath(path string) string {
 		}
 	}
 	return ""
-}
-
-// markStale keeps the cached scan answering while the next report
-// rescans in the background.
-func (h *Hunter) markStale() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.cachedAt = time.Time{}
 }

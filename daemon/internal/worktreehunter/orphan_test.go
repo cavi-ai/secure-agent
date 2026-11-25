@@ -174,7 +174,7 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if h.ListedPath(wt) != wt || h.ListedPath(lost) != "" || h.ListedPath("/nowhere") != "" {
 		t.Fatal("Listed does not follow the report")
 	}
-	h.bgWG.Wait()
+	h.Wait()
 }
 
 // agentAt reads every session at or under a folder: in use when any is
@@ -226,5 +226,5 @@ func TestTrashOrphanRefusesAnAgentWorkingThere(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(lost, "notes.txt")); err != nil {
 		t.Fatalf("the refused folder moved: %v", err)
 	}
-	h.bgWG.Wait()
+	h.Wait()
 }

@@ -248,28 +248,19 @@ def run_worktrees(page):
         f"cols={len(dom_query(rc).find_all(None, {'class': 'rc-col'}))} days={len(dom_query(rc).find_all(None, {'data-action': 'reclaim-day'}))}",
     )
     check(
-        'worktrees: an old cached scan shows at once and the tab re-reads until the rescan lands',
+        'worktrees: an old cached scan shows at once and the tab reads it again only on Reload',
         (
-            'gone-since' not in wt_block(dom_wtrefresh)
-            and (
-                'refreshing…' not in dom_query(dom_wtrefresh).text
-                and not dom_query(dom_wtrefresh).has(None, {'title': lambda value: 'refreshing…' in (value or '')})
-            )
-            and (
-                'scanned in 4.2s' in dom_query(dom_wtrefresh).text
-                or dom_query(dom_wtrefresh).has(None, {'title': lambda value: 'scanned in 4.2s' in (value or '')})
-            )
+            'gone-since' in wt_block(dom_wtrefresh)
+            and 'sizes still being measured; Reload shows them' in dom_query(dom_wtrefresh).text
+            and 'refreshing…' not in dom_query(dom_wtrefresh).text
+            and dom_query(dom_wtrefresh).has('button', {'data-action': 'worktrees-reload'})
         ),
     )
     check(
-        'worktrees: while the daemon is still measuring, the tab re-reads until sizes land',
+        'worktrees: while the daemon is still measuring, the tab says Reload shows the sizes and reads nothing more',
         (
-            '<span class="wt-size">1.5 GB</span>' in wt_block(dom_wtsizing)
-            and (
-                'measuring…' not in dom_query(dom_wtsizing).text
-                and not dom_query(dom_wtsizing).has(None, {'title': lambda value: 'measuring…' in (value or '')})
-            )
-            and '<b>Worktrees</b> 1.5 GB' in dom_wtsizing
+            '<span class="wt-size">1.5 GB</span>' not in wt_block(dom_wtsizing)
+            and 'sizes still being measured; Reload shows them' in dom_query(dom_wtsizing).text
         ),
     )
 
@@ -318,7 +309,6 @@ def run_worktrees_2(page):
     check = page.check
     dom_wtadopt = page.fixture('dom_wtadopt')
     dom_wtbatch = page.fixture('dom_wtbatch')
-    dom_wtcadence = page.fixture('dom_wtcadence')
     dom_wtday = page.fixture('dom_wtday')
     dom_wtday_midnight = page.fixture('dom_wtday_midnight')
     dom_wtgroup = page.fixture('dom_wtgroup')
@@ -413,13 +403,13 @@ def run_worktrees_2(page):
     wtg = wt_block(dom_wtremoving)
     tg = toast_block(dom_wtremoving)
     check(
-        'worktrees: while a removal runs a toast follows it: phase, size and files, time in the phase, the bar',
+        'worktrees: while a removal request runs a toast follows it: step, time in the step, the bar',
         (
             dom_query(dom_wtremoving).has(None, {'class': 'toast toast-sticky removal-toast info'})
             and '<p class="rt-title" role="status">Removing feat/done</p>' in tg
-            and '<span class="rt-step">deleting · 1.5 GB · 184,203 files</span>' in tg
+            and '<span class="rt-step">checking it is still safe to remove</span>' in tg
             and dom_query(tg).has(None, {'role': 'progressbar'})
-            and dom_query(tg).has(None, {'aria-valuenow': '50'})
+            and dom_query(tg).has(None, {'aria-valuenow': '15'})
             and 'rt-bar-running' in tg
             and dom_query(tg).has('span', {'class': 'rt-elapsed', 'data-since': None})
             and 's</span>' in tg
@@ -427,9 +417,9 @@ def run_worktrees_2(page):
         tg[:600],
     )
     check(
-        'worktrees: while a removal runs its row shows the phase marks, step and size, and Remove is disabled',
+        'worktrees: while a removal request runs its row shows the phase marks and step, and Remove is disabled',
         (
-            '<span class="wt-steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><b>Removing…</b> deleting · 1.5 GB · 184,203 files</p>' in wtg
+            '<span class="wt-steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i class=""></i><i class=""></i></span><b>Removing…</b> checking it is still safe to remove</p>' in wtg
             and '<button type="button" class="btn btn-danger btn-sm" disabled="">Removing…</button>' in wtg
             and not dom_query(wtg).has(None, {'data-action': 'worktree-remove'})
         ),
@@ -552,7 +542,7 @@ def run_worktrees_2(page):
         'worktrees: Ask advisor about all posts the repository and toasts how many worktrees it will work through',
         (
             'POST /worktrees/advise body={"repo":"/Users/dev/workspace/api-service"}' in gd_reqs
-            and 'Asking the advisor about 3 worktrees, one at a time — notes appear under each row as it answers' in html.unescape(pre(dom_wtgroup, 'gd-toast'))
+            and 'Asking the advisor about 3 worktrees, one at a time — Reload shows each note under its row once it answers' in html.unescape(pre(dom_wtgroup, 'gd-toast'))
         ),
         gd_reqs,
     )
@@ -568,21 +558,13 @@ def run_worktrees_2(page):
         ),
         gd_reqs,
     )
-    gap = pre(dom_wtcadence, 'remove-cadence')
-    check(
-        'worktrees: a removal started while a 5 s sizing re-read waits is re-read on its own 1.5 s cadence',
-        (
-            gap.isdigit()
-            and int(gap) < 2000
-        ),
-        f'gap={gap!r}ms',
-    )
     ta = toast_block(dom_wtadopt)
     check(
         'worktrees: a removal already running when the tab opens gets the progress toast without a click',
         (
             '<p class="rt-title" role="status">Removing feat/done</p>' in ta
             and 'checking it is still safe to remove' in ta
+            and 'as of the last read; Reload shows the outcome' in ta
         ),
         ta[:300],
     )
@@ -609,5 +591,5 @@ CASES = (
     Case('worktree_hierarchy', run_worktree_hierarchy),
     Case('worktrees', run_worktrees, ('dom_memfam', 'dom_wt', 'dom_wtdiscuss', 'dom_wtdiscussoff', 'dom_wtdockcycle', 'dom_wtrefresh', 'dom_wtreview', 'dom_wtreviewtrash', 'dom_wtsizing')),
     Case('clutter', run_clutter, ('dom_clutter', 'dom_clutteradvise', 'dom_clutter_view')),
-    Case('worktrees_2', run_worktrees_2, ('dom_wtadopt', 'dom_wtbatch', 'dom_wtcadence', 'dom_wtday', 'dom_wtday_midnight', 'dom_wtgroup', 'dom_wthistory', 'dom_wtorphan', 'dom_wtorphantrash', 'dom_wtremovable', 'dom_wtremove', 'dom_wtremovefail', 'dom_wtremoving', 'dom_wtsearch')),
+    Case('worktrees_2', run_worktrees_2, ('dom_wtadopt', 'dom_wtbatch', 'dom_wtday', 'dom_wtday_midnight', 'dom_wtgroup', 'dom_wthistory', 'dom_wtorphan', 'dom_wtorphantrash', 'dom_wtremovable', 'dom_wtremove', 'dom_wtremovefail', 'dom_wtremoving', 'dom_wtsearch')),
 )

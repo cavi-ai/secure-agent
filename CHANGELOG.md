@@ -23,6 +23,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Proxy: proxy credential headers and hop-by-hop headers are removed before a plain-HTTP request is forwarded; inspected CONNECT tunnels drop the proxy credential headers.
 - Fleet collector: HTTP connections have header, read, write and idle timeouts and a 64 KiB header limit; a redelivered envelope is acknowledged and not stored again.
 - Fleet collector: each node keeps at most 512 session records in memory and in the rollup checkpoint; ended sessions are dropped first.
+- Worktrees: the daemon scans only on a rescan request or when no scan is saved; the console reads the report when the view opens and on Reload or Rescan instead of on a timer, and a removal answers in its own request.
 
 ## [1.7.0] - 2026-11-21
 

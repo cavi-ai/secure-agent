@@ -4,7 +4,7 @@ import os
 import unittest
 
 MOCK = os.path.join(os.path.dirname(__file__), "mock_dom.js")
-SCENARIO_BRANCHES = 291
+SCENARIO_BRANCHES = 288
 
 
 class MockScenarioBranchTests(unittest.TestCase):

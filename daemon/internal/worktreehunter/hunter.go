@@ -7,8 +7,9 @@
 //   - Read-only toward the repositories: GIT_OPTIONAL_LOCKS=0, no fetch, no
 //     object writes, no network. Merge detection is local (ancestry, then a
 //     patch-id match for squash merges, then a match of the added lines).
-//   - Scans run on request, one at a time, with a cached result; no
-//     background loop.
+//   - Scans run one at a time, only on an asked refresh or when no scan is
+//     cached; a report read answers from the cached scan at any age, and row
+//     actions edit that scan in place.
 //   - The verdict is deterministic (classify). Nothing outside the facts
 //     can turn keep into remove.
 package worktreehunter
@@ -52,9 +53,6 @@ type Options struct {
 const (
 	// DefaultStaleDays is the idle age that marks a worktree stale.
 	DefaultStaleDays = 14
-	// cacheTTL is how long a scan answers GET without a rescan; an older
-	// scan still answers while a background rescan replaces it.
-	cacheTTL = 10 * time.Minute
 	// minRescan is the floor under refresh: a console or script asking for a
 	// rescan in a loop gets the last scan instead of a git process storm.
 	minRescan = 30 * time.Second
@@ -76,8 +74,8 @@ type ScanReport struct {
 	// Sizing is true while some worktrees still wait for the background
 	// sizer; their size is missing and the totals are lower bounds.
 	Sizing bool `json:"sizing,omitempty"`
-	// Refreshing is true while a background rescan or re-measure replaces
-	// this cached report.
+	// Refreshing is true while the background sizer re-measures sizes this
+	// report already shows.
 	Refreshing bool `json:"refreshing,omitempty"`
 	// Removals are the running removals and those that ended in the last
 	// 30 minutes, by path.
@@ -137,18 +135,13 @@ type Hunter struct {
 	opts     Options
 	cached   *ScanReport
 	cachedAt time.Time
-	// bgCancel cancels the running background rescan; actions counts the
-	// row actions waiting for or holding scanMu. Both under mu.
-	bgCancel context.CancelCauseFunc
-	actions  int
 
-	// scanMu serializes scans; a request that waited on it reuses the scan
-	// that finished meanwhile.
+	// scanMu serializes scans and row actions; a request that waited on it
+	// reuses the scan that finished meanwhile.
 	scanMu sync.Mutex
 	// loaded is set once the saved report and sizes were read from the
-	// store; bgWG lets tests wait for a background rescan.
+	// store.
 	loaded bool
-	bgWG   sync.WaitGroup
 
 	// removals tracks each removal's steps and outcome by path; remWG lets
 	// tests wait for background removals.
@@ -219,6 +212,7 @@ func (h *Hunter) Options() Options {
 	return h.opts
 }
 
+// invalidate drops the cached scan, so the next report scans once.
 func (h *Hunter) invalidate() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -236,30 +230,19 @@ func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
 	return rep
 }
 
-// Wait returns once the removals, background rescans and sizing passes
-// started so far have finished.
+// Wait returns once the removals and sizing passes started so far have
+// finished.
 func (h *Hunter) Wait() {
 	h.remWG.Wait()
-	h.bgWG.Wait()
 	h.sizeWG.Wait()
 }
 
-// report answers from the cached scan unless refresh is asked: one older
-// than cacheTTL answers at once while a background rescan replaces it.
+// report answers from the cached scan at any age unless refresh is asked.
 // Without a cached scan, or on refresh, it scans under its own deadline,
 // detached from ctx's cancellation, so a client that gives up still leaves
 // a finished report for the next request.
 func (h *Hunter) report(ctx context.Context, refresh bool) ScanReport {
 	h.load()
-	if !refresh {
-		if r, stale, ok := h.cachedCopy(); ok {
-			if stale {
-				h.rescanInBackground()
-				r.Refreshing = true
-			}
-			return r
-		}
-	}
 	asked := h.now()
 	if r, ok := h.fresh(refresh, time.Time{}); ok {
 		return r
@@ -295,79 +278,63 @@ func (h *Hunter) keep(rep ScanReport, opts Options) {
 	}
 }
 
-// errPreempted is the cause a row action cancels a background rescan with.
-var errPreempted = errors.New("a row action needs the scan lock")
-
-// rescanInBackground starts a rescan unless one is running or a row action
-// waits for the scan lock. A row action cancels it (lockForAction) and its
-// partial report is dropped.
-func (h *Hunter) rescanInBackground() {
-	h.mu.Lock()
-	if h.actions > 0 || !h.scanMu.TryLock() {
-		h.mu.Unlock()
-		return
-	}
-	ctx, cancel := context.WithCancelCause(context.Background())
-	h.bgCancel = cancel
-	opts := h.opts
-	h.mu.Unlock()
-	h.bgWG.Add(1)
-	go func() {
-		defer h.bgWG.Done()
-		defer h.scanMu.Unlock()
-		defer cancel(nil)
-		sctx, stop := context.WithTimeout(ctx, scanTimeout)
-		defer stop()
-		rep := h.scan(sctx, opts)
-		h.mu.Lock()
-		h.bgCancel = nil
-		preempted := errors.Is(context.Cause(ctx), errPreempted)
-		h.mu.Unlock()
-		if !preempted {
-			h.keep(rep, opts)
-		}
-	}()
-}
-
 // lockForAction takes the scan lock for a row action (remove, prune, Trash,
-// reconnect) and returns its unlock. A background rescan holding the lock
-// is canceled rather than waited for: no request waits on it, and the
-// cached scan it was replacing stays old, so the next report rescans. No
-// background rescan starts while an action waits. waiting runs when the
-// lock is not free at once.
+// reconnect, hide) and returns its unlock, so no scan interleaves with it.
+// waiting runs when the lock is not free at once.
 func (h *Hunter) lockForAction(waiting func()) func() {
-	h.mu.Lock()
-	h.actions++
-	locked := h.scanMu.TryLock()
-	if !locked && h.bgCancel != nil {
-		h.bgCancel(errPreempted)
-	}
-	h.mu.Unlock()
-	if !locked {
+	if !h.scanMu.TryLock() {
 		if waiting != nil {
 			waiting()
 		}
 		h.scanMu.Lock()
 	}
-	return func() {
-		h.mu.Lock()
-		h.actions--
-		h.mu.Unlock()
-		h.scanMu.Unlock()
-	}
+	return h.scanMu.Unlock
 }
 
-// cachedCopy returns the cached scan at any age, and whether it is older
-// than cacheTTL.
-func (h *Hunter) cachedCopy() (ScanReport, bool, bool) {
+// dropFromCache takes rows (by path) and repository groups (by repository
+// path) out of the cached scan, with the error lines of the groups it
+// empties, recomputes the summary and saves it under the scan's own time.
+// Callers hold the scan lock.
+func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.cached == nil {
-		return ScanReport{}, false, false
+		h.mu.Unlock()
+		return
 	}
-	r := *h.cached
-	r.Cached = true
-	return r, h.now().Sub(h.cachedAt) >= cacheTTL, true
+	rep := *h.cached
+	rep.Repos = nil
+	gone := map[string]bool{}
+	for _, r := range h.cached.Repos {
+		if repos[r.Path] {
+			gone[r.Path] = true
+			continue
+		}
+		kept := make([]Worktree, 0, len(r.Worktrees))
+		for _, w := range r.Worktrees {
+			if !rows[w.Path] {
+				kept = append(kept, w)
+			}
+		}
+		if r.Error == ErrRepoMissing && len(kept) == 0 {
+			gone[r.Path] = true
+			continue
+		}
+		r.Worktrees = kept
+		rep.Repos = append(rep.Repos, r)
+	}
+	rep.Errors = nil
+	for _, e := range h.cached.Errors {
+		if repo, _, _ := strings.Cut(e, ": "); !gone[repo] {
+			rep.Errors = append(rep.Errors, e)
+		}
+	}
+	rep.Summary = summarize(rep.Repos)
+	h.cached = &rep
+	at, opts := h.cachedAt, h.opts
+	h.mu.Unlock()
+	if body, err := json.Marshal(savedReport{Options: opts, Report: rep}); err == nil {
+		h.st.PutScanCache(cacheReportKey, body, at)
+	}
 }
 
 const (
@@ -403,7 +370,7 @@ type savedSize struct {
 }
 
 // load reads the saved report and sizes once, so a restarted daemon
-// answers from them while it rescans.
+// answers from them until a rescan is asked.
 func (h *Hunter) load() {
 	h.mu.Lock()
 	if h.loaded {
@@ -437,20 +404,16 @@ func (h *Hunter) load() {
 	}
 }
 
-// fresh returns the cached report when it may answer: younger than cacheTTL
-// (minRescan when a refresh is asked), or finished after `after` (a scan
-// that completed while this request waited answers even a refresh).
+// fresh returns the cached report when it may answer: at any age without
+// refresh; on refresh, younger than minRescan or finished after `after` (a
+// scan that completed while this request waited).
 func (h *Hunter) fresh(refresh bool, after time.Time) (ScanReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cached == nil {
 		return ScanReport{}, false
 	}
-	maxAge := cacheTTL
-	if refresh {
-		maxAge = minRescan
-	}
-	if (!after.IsZero() && h.cachedAt.After(after)) || h.now().Sub(h.cachedAt) < maxAge {
+	if !refresh || (!after.IsZero() && h.cachedAt.After(after)) || h.now().Sub(h.cachedAt) < minRescan {
 		r := *h.cached
 		r.Cached = true
 		return r, true
@@ -462,7 +425,8 @@ func (h *Hunter) fresh(refresh bool, after time.Time) (ScanReport, bool) {
 var ErrNotRepo = errors.New("not inside a git repository")
 
 // AddRepo puts the repository containing path on the saved list as manual
-// (unhiding it if hidden) and returns its main worktree path.
+// (unhiding it if hidden) and returns its main worktree path. It drops the
+// cached scan, so the next report scans once.
 func (h *Hunter) AddRepo(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", errors.New("path must be absolute")
@@ -476,15 +440,19 @@ func (h *Hunter) AddRepo(path string) (string, error) {
 	return ref.Main, nil
 }
 
-// HideRepo hides a saved repository from reports. path may be any
-// directory inside it. Reports whether the repo was on the list.
+// HideRepo hides a saved repository from reports and takes its group out
+// of the cached scan. path may be any directory inside it. Reports whether
+// the repo was on the list.
 func (h *Hunter) HideRepo(path string) bool {
 	key := canonical(path)
 	if ref, _, ok := resolveRepo(path); ok {
 		key = ref.Main
 	}
+	defer h.lockForAction(nil)()
 	ok := h.st.SetWorktreeRepoHidden(key, true)
-	h.invalidate()
+	if ok {
+		h.dropFromCache(nil, map[string]bool{key: true})
+	}
 	return ok
 }
 

@@ -1,8 +1,9 @@
 // Worktrees tab: every git worktree the daemon found, sorted into lanes by
 // what removing it would cost, then grouped by repository. The report comes
-// from GET /worktrees on tab open (the daemon caches a scan for 10 minutes);
-// Rescan asks for a fresh one. Remove and Prune post /worktrees/remove, which
-// inspects the worktree again and refuses anything but a fresh remove.
+// from GET /worktrees when the view opens, on Reload (the daemon's saved scan)
+// and on Rescan (a new scan). Remove and Prune post /worktrees/remove, which
+// inspects the worktree again, refuses anything but a fresh remove and
+// answers with the outcome.
 
 // Lanes, in page order. The daemon's verdict decides the lane: remove and
 // prune are safe, review is check, keep splits on whether a reason keeps the
@@ -372,8 +373,8 @@ function removalToastHTML(m) {
   // A single running removal's phase and size are its item line.
   const sub = done
     ? [m.bytes ? `${fmtDisk(m.bytes)} reclaimed` : '', m.failed && m.total > 1 ? `${m.failed} not removed` : ''].filter(Boolean).join(' · ')
-    : m.total === 1 ? ''
-      : [`${m.removed + m.failed} of ${m.total} done`, m.bytes ? `${fmtDisk(m.bytes)} reclaimed so far` : ''].filter(Boolean).join(' · ');
+    : [m.total === 1 ? '' : `${m.removed + m.failed} of ${m.total} done`, m.total > 1 && m.bytes ? `${fmtDisk(m.bytes)} reclaimed so far` : '',
+      m.external ? 'as of the last read; Reload shows the outcome' : ''].filter(Boolean).join(' · ');
   const shown = m.items.filter(it => it.state !== 'removed').sort((a, b) => (a.state === 'running' ? 0 : 1) - (b.state === 'running' ? 0 : 1));
   const cap = 4;
   const itemHTML = it => {
@@ -628,7 +629,7 @@ function worktreeTrashConfirm(w) {
 function worktreeAskHTML(ask) {
   if (!ask) return '';
   let text;
-  if (ask.status === 'running') text = `waiting for ${ask.harness}'s answer…`;
+  if (ask.status === 'running') text = `waiting for ${ask.harness}'s answer as of the last read; Reload shows it`;
   else if (ask.status === 'answered' && ask.verdict !== 'none') {
     text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` (session $${Number(ask.cost_usd).toFixed(2)})` : ''}`;
   } else text = `${ask.status}${ask.detail ? ' — ' + ask.detail : ''}`;
@@ -759,7 +760,7 @@ function worktreeGroupAsksHTML(g) {
 function worktreeGroupAskText(res) {
   const n = Number(res && res.rows) || 0;
   const skipped = Number(res && res.skipped) || 0;
-  return `Asking the advisor about ${n} worktree${n === 1 ? '' : 's'}, one at a time — notes appear under each row as it answers`
+  return `Asking the advisor about ${n} worktree${n === 1 ? '' : 's'}, one at a time — Reload shows each note under its row once it answers`
     + (skipped ? ` (${skipped} more not asked: 40 at a time)` : '');
 }
 
@@ -832,9 +833,10 @@ function worktreeFilterHTML(counts, filter) {
 }
 
 // worktreesSummaryText: the scan line under the header. A cached scan
-// names its age; a background rescan says so. shown is the rows the panel
-// filter and the header search leave visible; fewer than the report holds
-// adds "N shown" (the counts above stay the report's).
+// names its age; sizes the daemon is still measuring say Reload shows them.
+// shown is the rows the panel filter and the header search leave visible;
+// fewer than the report holds adds "N shown" (the counts above stay the
+// report's).
 function worktreesSummaryText(rep, nowMs, shown) {
   if (!rep) return '';
   const s = rep.summary || {};
@@ -843,7 +845,12 @@ function worktreesSummaryText(rep, nowMs, shown) {
   const n = (v, one, many) => `${v || 0} ${v === 1 ? one : many}`;
   const hidden = shown != null && shown < worktreeLaneCounts(rep).all ? ` · ${shown} shown` : '';
   return `${n(s.repos, 'repo', 'repos')} · ${n(s.worktrees, 'worktree', 'worktrees')} · stale after ${rep.stale_days || 0} idle days · ${when}${hidden}`
-    + (rep.refreshing ? ' · refreshing…' : '');
+    + (rep.sizing || rep.refreshing ? ' · sizes still being measured; Reload shows them' : '');
+}
+
+// worktreesReadingText: what the summary line adds while a report read runs.
+function worktreesReadingText(state) {
+  return !state || !state.loading ? '' : state.loadingRefresh ? ' · rescanning…' : ' · reloading…';
 }
 
 // Selection changes retain the list, disclosure state, and focused checkbox.
@@ -896,7 +903,7 @@ function renderWorktrees() {
   const groups = worktreeGroups(rep, state.filter, term);
   const shown = groups.reduce((n, g) => n + g.rows.length, 0);
   if (pills) renderFilterPills(pills, worktreeFilterHTML(counts, state.filter));
-  if (summary) summary.textContent = worktreesSummaryText(rep, undefined, shown) + (state.loading ? ' · rescanning…' : '');
+  if (summary) summary.textContent = worktreesSummaryText(rep, undefined, shown) + worktreesReadingText(state);
   if (disk) {
     disk.innerHTML = worktreeDiskHTML(rep);
     applyInlineMetrics(disk);

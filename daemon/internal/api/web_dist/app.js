@@ -3879,6 +3879,10 @@ document.addEventListener('DOMContentLoaded', () => {
         worktreeController.toggleStaleFilter();
         renderNow(['worktrees']);
         break;
+      case 'worktrees-reload':
+        worktreeController.loadWorktrees(false);
+        worktreeController.loadLedger();
+        break;
       case 'worktrees-rescan':
         worktreeController.loadWorktrees(true);
         worktreeController.loadLedger();

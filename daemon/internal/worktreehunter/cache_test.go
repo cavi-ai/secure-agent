@@ -14,8 +14,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// A restarted daemon answers from the saved scan and sizes at once, then
-// rescans in the background once the saved scan is older than cacheTTL.
+// A restarted daemon answers from the saved scan and sizes at once, and from
+// that scan at any age until a rescan is asked.
 func TestSavedScanAndSizesAnswerAfterRestart(t *testing.T) {
 	home := isolateGit(t)
 	f := newFixture(t)
@@ -43,13 +43,12 @@ func TestSavedScanAndSizesAnswerAfterRestart(t *testing.T) {
 			rep.Cached, rep.Refreshing, rep.Sizing, row.State, row.SizeBytes)
 	}
 
-	now = now.Add(cacheTTL + time.Second)
-	if rep := restarted.Report(context.Background(), false); !rep.Refreshing {
-		t.Fatal("an expired saved scan must answer while a rescan runs")
+	now = now.Add(time.Hour)
+	if rep := restarted.Report(context.Background(), false); !rep.Cached || findRow(t, rep, done).State == StatePrune {
+		t.Fatal("an old saved scan must answer unchanged until a rescan is asked")
 	}
-	restarted.bgWG.Wait()
-	if row := findRow(t, restarted.Report(context.Background(), false), done); row.State != StatePrune {
-		t.Fatalf("the background rescan did not see the removed worktree: %s", row.State)
+	if row := findRow(t, restarted.Report(context.Background(), true), done); row.State != StatePrune {
+		t.Fatalf("the asked rescan did not see the removed worktree: %s", row.State)
 	}
 
 	other := New(st, home, Options{StaleDays: 30})
@@ -180,7 +179,6 @@ func TestAskedRefreshRemeasuresRecentSizes(t *testing.T) {
 
 	h.Report(context.Background(), false)
 	h.sizeWG.Wait()
-	h.bgWG.Wait()
 	if got := findRow(t, h.Report(context.Background(), false), done).SizeBytes; got != before {
 		t.Fatalf("an unasked report re-measured a size within sizeTTL: %d, was %d", got, before)
 	}
