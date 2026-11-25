@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // Envelope mirrors the fleet webhook body (daemon/internal/fleet).
@@ -133,21 +134,59 @@ func main() {
 
 	c := &Collector{cfg: cfg, store: NewStore(cfg.StoreDir)}
 
+	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
+	srv := newServer(cfg.Addr, c, defaultServerTimeouts)
+	log.Fatal(srv.ListenAndServe())
+}
+
+// newMux registers every collector route.
+func newMux(c *Collector, writeTimeout time.Duration) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
 	mux.HandleFunc("GET /fleet", c.requireReadAuth(c.handleFleet))
 	mux.HandleFunc("GET /fleet/rules", c.requireReadAuth(c.handleFleetRules))
 	mux.HandleFunc("GET /fleet/sessions", c.requireReadAuth(c.handleFleetSessions))
-	mux.HandleFunc("GET /nodes/", c.requireReadAuth(c.handleNodeEvents))
+	mux.HandleFunc("GET /nodes/", c.requireReadAuth(func(w http.ResponseWriter, r *http.Request) {
+		c.handleNodeEvents(w, r, writeTimeout)
+	}))
 	mux.HandleFunc("GET /", c.requireReadAuth(c.handleOverview))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
 	})
+	return mux
+}
 
-	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
-	srv := &http.Server{Addr: cfg.Addr, Handler: mux}
-	log.Fatal(srv.ListenAndServe())
+// serverTimeouts bounds how long a connection may hold server resources.
+type serverTimeouts struct {
+	ReadHeader     time.Duration
+	Read           time.Duration
+	Write          time.Duration
+	Idle           time.Duration
+	MaxHeaderBytes int
+}
+
+// defaultServerTimeouts fits a 2 MiB signed envelope post. The node events
+// handler starts its write budget once it has built the response.
+var defaultServerTimeouts = serverTimeouts{
+	ReadHeader:     5 * time.Second,
+	Read:           30 * time.Second,
+	Write:          30 * time.Second,
+	Idle:           60 * time.Second,
+	MaxHeaderBytes: 64 << 10,
+}
+
+// newServer builds the collector's HTTP server with the given limits.
+func newServer(addr string, c *Collector, t serverTimeouts) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           newMux(c, t.Write),
+		ReadHeaderTimeout: t.ReadHeader,
+		ReadTimeout:       t.Read,
+		WriteTimeout:      t.Write,
+		IdleTimeout:       t.Idle,
+		MaxHeaderBytes:    t.MaxHeaderBytes,
+	}
 }
 
 func (c Config) validateReadAccess() error {
@@ -300,7 +339,7 @@ func (c *Collector) handleFleetSessions(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleNodeEvents replays one node's stored envelopes (newest first).
-func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request) {
+func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request, writeTimeout time.Duration) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -319,7 +358,28 @@ func (c *Collector) handleNodeEvents(w http.ResponseWriter, r *http.Request) {
 	if l := r.URL.Query().Get("limit"); l != "" {
 		fmt.Sscanf(l, "%d", &limit)
 	}
+
+	// The JSONL query can scan the whole history before returning a page.
+	// Start the write budget after the scan and JSON encoding.
+	var dst io.Writer = w
+	if writeTimeout > 0 {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		dst = &eventResponseWriter{w: w, timeout: writeTimeout}
+	}
 	events := c.store.Query(nodeID, kinds, limit)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(events)
+	_ = json.NewEncoder(dst).Encode(events)
+}
+
+type eventResponseWriter struct {
+	w       http.ResponseWriter
+	timeout time.Duration
+}
+
+func (w *eventResponseWriter) Write(p []byte) (int, error) {
+	if w.timeout > 0 {
+		_ = http.NewResponseController(w.w).SetWriteDeadline(time.Now().Add(w.timeout))
+		w.timeout = 0
+	}
+	return w.w.Write(p)
 }
