@@ -8,6 +8,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -76,6 +77,20 @@ const gapGrace = 90 * time.Second
 // confirmed loss (a hole that old is never coming back).
 const maxTrackedHoles = 2048
 
+// Keep a bounded history of applied deliveries. One minute covers the
+// publisher's four 10-second HTTP attempts and 7.5 seconds of retry backoff.
+const (
+	redeliveryWindow    = time.Minute
+	maxRecentDeliveries = 1024
+)
+
+type deliveryKey [sha256.Size]byte
+
+type appliedDelivery struct {
+	key deliveryKey
+	at  time.Time
+}
+
 // windowEvent is one security event inside the rolling count window.
 type windowEvent struct {
 	ts       time.Time
@@ -103,6 +118,9 @@ type nodeRuntime struct {
 	holes         []sequenceHole
 	retiredBoots  []string
 	confirmedGaps int
+	// The FIFO bounds history, and the index gives each delivery's receipt time.
+	applied   []appliedDelivery
+	appliedAt map[deliveryKey]time.Time
 }
 
 type sequenceHole struct {
@@ -201,36 +219,104 @@ type Store struct {
 func NewStore(dir string) *Store {
 	s := &Store{log: &jsonlLog{dir: dir}, nodes: map[string]*nodeRuntime{}}
 	s.log.Replay(func(env Envelope, receivedAt string) {
-		s.apply(env, receivedAt)
+		s.applyOnce(env, receivedAt, false)
 	})
 	return s
 }
 
-// Append stores one verified envelope and folds it into the rollup.
+// Append stores one verified envelope and folds it into the rollup. An
+// identical sequenced envelope received recently is acknowledged without
+// being stored or counted again.
 func (s *Store) Append(env Envelope) error {
-	receivedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.log.Append(env, receivedAt); err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.applyOnce(env, time.Now().UTC().Format(time.RFC3339Nano), true)
+}
+
+// applyOnce shares the duplicate check across live delivery and replay.
+// Caller must hold mu or be single-threaded. Replay supplies records that are
+// already on disk, so only live delivery writes to the log.
+func (s *Store) applyOnce(env Envelope, receivedAt string, persist bool) error {
+	key, tracked := envelopeDeliveryKey(env)
+	ts := receiptTime(receivedAt)
+	cutoff := ts.Add(-redeliveryWindow)
+	if tracked && s.nodes[env.NodeID].isRedelivery(key, cutoff) {
+		return nil
+	}
+	if persist {
+		if err := s.log.Append(env, receivedAt); err != nil {
+			return err
+		}
+	}
 	s.apply(env, receivedAt)
+	if tracked {
+		s.nodes[env.NodeID].rememberDelivery(key, ts, cutoff)
+	}
 	return nil
+}
+
+func receiptTime(receivedAt string) time.Time {
+	ts, _ := time.Parse(time.RFC3339Nano, receivedAt)
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	return ts
+}
+
+func (s *Store) runtime(nodeID string) *nodeRuntime {
+	rt := s.nodes[nodeID]
+	if rt == nil {
+		rt = &nodeRuntime{state: &NodeState{NodeID: nodeID}}
+		s.nodes[nodeID] = rt
+	}
+	return rt
+}
+
+// Separate publisher sinks can share a boot ID and use independent sequence
+// counters. Hash the full envelope using the log's JSON encoding so the same
+// delivery has the same key after replay. Legacy envelopes are untracked.
+func envelopeDeliveryKey(env Envelope) (deliveryKey, bool) {
+	if env.Boot == "" || env.Seq == 0 {
+		return deliveryKey{}, false
+	}
+	body, err := json.Marshal(env)
+	if err != nil {
+		return deliveryKey{}, false // Persistence handles invalid envelopes.
+	}
+	return sha256.Sum256(body), true
+}
+
+func (rt *nodeRuntime) isRedelivery(key deliveryKey, cutoff time.Time) bool {
+	if rt == nil {
+		return false
+	}
+	at, ok := rt.appliedAt[key]
+	return ok && !at.Before(cutoff)
+}
+
+func (rt *nodeRuntime) rememberDelivery(key deliveryKey, ts, cutoff time.Time) {
+	drop := 0
+	for drop < len(rt.applied) && (rt.applied[drop].at.Before(cutoff) || len(rt.applied)-drop >= maxRecentDeliveries) {
+		entry := rt.applied[drop]
+		if rt.appliedAt[entry.key] == entry.at {
+			delete(rt.appliedAt, entry.key)
+		}
+		drop++
+	}
+	rt.applied = rt.applied[drop:]
+	if rt.appliedAt == nil {
+		rt.appliedAt = make(map[deliveryKey]time.Time)
+	}
+	rt.appliedAt[key] = ts
+	rt.applied = append(rt.applied, appliedDelivery{key: key, at: ts})
 }
 
 // apply folds one envelope into the in-memory rollup. Caller must hold mu
 // (the replay path is single-threaded).
 func (s *Store) apply(env Envelope, receivedAt string) {
-	rt := s.nodes[env.NodeID]
-	if rt == nil {
-		rt = &nodeRuntime{state: &NodeState{NodeID: env.NodeID}}
-		s.nodes[env.NodeID] = rt
-	}
+	rt := s.runtime(env.NodeID)
 	st := rt.state
-	ts, _ := time.Parse(time.RFC3339Nano, receivedAt)
-	if ts.IsZero() {
-		ts = time.Now()
-	}
+	ts := receiptTime(receivedAt)
 	currentBoot := env.Boot == "" || rt.trackSeq(env.Boot, env.Seq, ts)
 	// Delayed deliveries still carry useful evidence, but cannot reset the
 	// active stream's sequence health or roll back its reported version.
