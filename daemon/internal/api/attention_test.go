@@ -17,6 +17,9 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
+// machineGroupKey is the group key reserved for signals no agent owns.
+const machineGroupKey = "machine"
+
 func attentionDeps(t *testing.T, sessions []resource.Session) Deps {
 	t.Helper()
 

@@ -32,6 +32,16 @@ func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
 	return firstNonEmpty([]string{org, host}), org, host
 }
 
+// firstNonEmpty is the first non-empty string in strs, or "".
+func firstNonEmpty(strs []string) string {
+	for _, s := range strs {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // readConnectWhy is the reason a sensitive-read-then-connect flag needs a
 // look, from its evidence: whether the destination owns the file that was
 // read and, when it does, why the connection still did not count as the

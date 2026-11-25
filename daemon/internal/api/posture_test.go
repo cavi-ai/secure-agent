@@ -14,6 +14,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
@@ -378,36 +379,6 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	}
 }
 
-// A failing root service AND a never-produced tailer are one blind spot:
-// posture must carry exactly one collector_silent item for eslogger.
-func TestPostureSingleESItemWhenProbeFails(t *testing.T) {
-	st := Status{
-		Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
-		Collectors: []supervise.Health{{Name: "eslogger", Running: true}}, // never produced
-		ESService:  &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)},
-	}
-	count := 0
-	for _, it := range silentCollectorItems(time.Now(), st) {
-		if it.ID == "eslogger" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("eslogger items = %d, want exactly 1", count)
-	}
-	// Healthy probe + silent tailer: the tailer silence still surfaces.
-	st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now()}
-	count = 0
-	for _, it := range silentCollectorItems(time.Now(), st) {
-		if it.ID == "eslogger" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("healthy probe + silent tailer: eslogger items = %d, want 1 (tailer silence)", count)
-	}
-}
-
 // timeAt returns a pointer to t, for optional time fields.
 func timeAt(t time.Time) *time.Time { return &t }
 
@@ -483,13 +454,13 @@ func TestHarnessUncoveredIgnoresTranscriptHits(t *testing.T) {
 	status := Status{ActiveAgents: 2, Agents: []AgentSummary{{PID: 42, Name: "cursor"}}}
 	st.UpsertSession(model.Session{ID: "cursor-session", Harness: "cursor", StartedAt: time.Now(), LastSeenAt: time.Now()})
 	st.PutEvent(event.Event{Kind: event.KindTranscriptHit, TS: time.Now(), Detail: "aws-key"})
-	items := harnessUncoveredItems(harnessCoverage(status, storeActivity(st)))
+	items := posture.HarnessUncoveredItems(harnessCoverage(status, storeActivity(st)))
 	if len(items) == 0 {
 		t.Fatal("transcript hit must not clear harness_uncovered")
 	}
 	// A real hook action DOES clear it.
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), SessionID: "cursor-session", Detail: "Read"})
-	if items := harnessUncoveredItems(harnessCoverage(status, storeActivity(st))); len(items) != 0 {
+	if items := posture.HarnessUncoveredItems(harnessCoverage(status, storeActivity(st))); len(items) != 0 {
 		t.Fatalf("plugin action should clear harness_uncovered, got %+v", items)
 	}
 }

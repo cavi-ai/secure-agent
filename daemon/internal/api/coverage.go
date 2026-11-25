@@ -11,6 +11,9 @@ import (
 
 type HarnessCoverage = posture.HarnessCoverage
 
+// hookActivityWindow is how far back hook evidence counts as activity.
+const hookActivityWindow = 24 * time.Hour
+
 // harnessActivityTTL is how long one read of the 24 h harness activity
 // serves status, posture and Doctor: the query scans a day of trace rows
 // under the store lock, and a day-wide window cannot turn on 30 seconds.
@@ -78,16 +81,4 @@ func activeHarness(status Status, name string) bool {
 		}
 	}
 	return false
-}
-
-func harnessUncoveredItems(rows []HarnessCoverage) []PostureItem {
-	var items []PostureItem
-	for _, row := range rows {
-		if row.GuardSupported && row.HookLastSeen == "" {
-			items = append(items, PostureItem{Kind: "harness_uncovered", ID: "harness-hooks:" + row.Name, Severity: 2,
-				Title:  row.Name + ": no guard hook activity in 24h",
-				Detail: "This harness is running, but no attributed guard-hook activity was observed. Check its hook registration; tracing alone does not prove guarding."})
-		}
-	}
-	return items
 }
