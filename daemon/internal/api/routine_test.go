@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
 
 func agentFlag(f model.Flag, agent string) model.Flag {
@@ -157,7 +158,7 @@ func TestAttentionFoldsRoutineAcrossAgents(t *testing.T) {
 	a.store.PutFlag(other)
 
 	groups := attentionGroups(a)
-	if len(groups) < 2 || groups[0].Key != routineGroupKey || len(groups[0].Items) != 1 {
+	if len(groups) < 2 || groups[0].Key != posture.RoutineGroupKey || len(groups[0].Items) != 1 {
 		t.Fatalf("groups = %+v, want the routine group first with one item", groups)
 	}
 	it := groups[0].Items[0]

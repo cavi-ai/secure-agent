@@ -52,25 +52,6 @@ func TestAttentionAgentGroupSummarySingleFlagAndLive(t *testing.T) {
 	if want := "1 process (claude-code 2.1.281 via Claude.app) in 1 session, exited"; g.Summary != want {
 		t.Fatalf("summary = %q, want %q", g.Summary, want)
 	}
-	live := newAgentGroupFacts()
-	live.addFlag(claudeReadFlag("x", 42, "", time.Now()))
-	if got := live.summary(map[int32]bool{42: true}); got != "1 process (claude-code 2.1.281 via Claude.app), no session, 1 still running" {
-		t.Fatalf("live summary = %q", got)
-	}
-}
-
-func TestProcessLabel(t *testing.T) {
-	for _, c := range []struct{ name, launcher, want string }{
-		{"claude", claudeLauncher, "claude-code 2.1.281 via Claude.app"},
-		{"zsh", claudeLauncher, "zsh in claude-code 2.1.281 via Claude.app"},
-		{"Cursor Helper (Plugin)", "Cursor.app", "Cursor Helper (Plugin) via Cursor.app"},
-		{"opencode", "opencode", "opencode"},
-		{"node", "", "node"},
-	} {
-		if got := processLabel(c.name, c.launcher); got != c.want {
-			t.Fatalf("processLabel(%q, %q) = %q, want %q", c.name, c.launcher, got, c.want)
-		}
-	}
 }
 
 // The snapshot is served on /flags, /flags/{id}/explain and aggregated on

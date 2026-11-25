@@ -8,6 +8,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -89,7 +90,7 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 		failedReads = append(failedReads, "finding reviews")
 	}
 	for i := range flags {
-		flags[i].Title = humanFlagTitle(flags[i].Rule)
+		flags[i].Title = posture.HumanFlagTitle(flags[i].Rule)
 	}
 	a.stampExplains(flags)
 	since := dayWindow(time.Now())
@@ -137,7 +138,7 @@ func mutePairsFrom(policy map[string][]correlate.Mute) []MutePair {
 	out := []MutePair{}
 	for rule, mutes := range policy {
 		for _, m := range mutes {
-			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent, Title: humanFlagTitle(rule)})
+			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent, Title: posture.HumanFlagTitle(rule)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

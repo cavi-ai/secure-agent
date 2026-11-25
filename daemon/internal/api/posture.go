@@ -12,6 +12,23 @@ import (
 // PostureItem is one thing the operator may need to act on.
 type PostureItem = posture.PostureItem
 
+type AttentionItem = posture.AttentionItem
+
+type AttentionGroup = posture.AttentionGroup
+
+type AttentionSummary = posture.AttentionSummary
+
+type AttentionBucket = posture.AttentionBucket
+
+type AttentionReference = posture.AttentionReference
+
+// AttentionBuckets and PostureItemAttentionKinds are the summary enumerations
+// the console and menu bar copy; posture defines them.
+var (
+	AttentionBuckets          = posture.AttentionBuckets
+	PostureItemAttentionKinds = posture.PostureItemAttentionKinds
+)
+
 // Posture is a defined type so the /posture response keeps the wire name api.Posture.
 type Posture posture.Posture
 

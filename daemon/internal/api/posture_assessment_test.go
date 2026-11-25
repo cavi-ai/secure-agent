@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
 
 func TestPosturePreservesFindingAssessment(t *testing.T) {
@@ -23,7 +24,7 @@ func TestPosturePreservesFindingAssessment(t *testing.T) {
 		{"blocked", "critical", "blocked", "transmission-attempt", "A registered secret fingerprint matched an inspected outbound request body. The local proxy rejected this request before forwarding.", payloadFlag(t, "fingerprint", "block", "block")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := derivePosture(postureInputs{Status: Status{Running: true}, Generated: time.Now(), Flags: []model.Flag{tc.flag}})
+			p := derivePosture(posture.Inputs{Status: posture.Status{Running: true}, Generated: time.Now(), Flags: []model.Flag{tc.flag}})
 			if p.State != "critical" || p.NeedsYou != 1 || p.Items[0].Severity != 3 {
 				t.Fatalf("priority changed: %+v", p)
 			}
@@ -63,7 +64,7 @@ func TestPostureReviewKeepsEvidenceAndReviewBoundary(t *testing.T) {
 	a := model.AssessFinding(f)
 	r := model.ReviewRecord{ID: "review", Severity: 3, EvidenceAvailable: true, Assessment: a,
 		Context: model.ReviewContext{Rule: f.Rule, SessionID: "session", Attribution: "stored-session"}}
-	p := derivePosture(postureInputs{Status: Status{Running: true}, Generated: time.Now(), Reviews: []model.ReviewRecord{r}})
+	p := derivePosture(posture.Inputs{Status: posture.Status{Running: true}, Generated: time.Now(), Reviews: []model.ReviewRecord{r}})
 	if p.NeedsYou != 1 || p.Items[0].Kind != "review" || p.Summary != "A sensitive file was read through an agent tool and became model-visible." {
 		t.Fatalf("review headline: %+v", p)
 	}

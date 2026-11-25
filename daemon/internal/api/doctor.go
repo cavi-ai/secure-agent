@@ -368,7 +368,7 @@ func checkCollectors(f doctorFacts) (string, string) {
 	spoolFailing := f.st.ESService != nil && len(posture.ESServiceItems(f.now, *f.st.ESService)) > 0
 	if f.st.ActiveAgents > 0 {
 		for _, it := range silentCollectorItems(f.now, f.st) {
-			if !isMonitoringGap(it) {
+			if !posture.IsMonitoringGap(it) {
 				continue
 			}
 			if it.ID == "eslogger" && spoolFailing {

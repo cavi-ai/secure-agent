@@ -9,9 +9,10 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 )
 
-const readConnectRule = "sensitive-read-then-connect"
+const readConnectRule = posture.ReadConnectRule
 
 // evidenceOfKind is f's first evidence item of kind, nil when it has none.
 func evidenceOfKind(f model.Flag, kind string) *model.EvidenceItem {

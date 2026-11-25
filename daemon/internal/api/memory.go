@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -79,7 +80,7 @@ func memoryRuleTitle(rule string) string {
 	case "proxy-secret-leak", "sensitive-read-then-connect", "keychain-access", "keychain-security-cli", "tcc-tamper",
 		"launch-item-change", "trust-change", "xprotect-detection",
 		"proxy-prompt-injection", "secret-in-transcript", "untrusted-egress":
-		return humanFlagTitle(rule)
+		return posture.HumanFlagTitle(rule)
 	default:
 		return "Security finding"
 	}

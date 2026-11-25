@@ -18,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -594,7 +595,7 @@ func TestFamilyTitleKeepsIDs(t *testing.T) {
 		"untagged:bun":  "untagged:bun",
 		"Cursor":        "Cursor",
 	} {
-		if got := familyTitle(in); got != want {
+		if got := posture.FamilyTitle(in); got != want {
 			t.Errorf("familyTitle(%q) = %q, want %q", in, got, want)
 		}
 	}
