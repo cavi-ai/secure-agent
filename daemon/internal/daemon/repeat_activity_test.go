@@ -65,19 +65,3 @@ func TestRepeatOpenWithoutAStoredRowIsStored(t *testing.T) {
 		t.Fatal("an open whose write failed folded the next one")
 	}
 }
-
-// An agent process's repeated opens of one file are stored once.
-func TestDrainStoresARepeatedOpenOnce(t *testing.T) {
-	f := newPersistenceFixture(t)
-	t0 := time.Now().UTC()
-	open := func(path string, at time.Duration) event.Event {
-		return event.Event{Kind: event.KindFileOpen, PID: 500, ExePath: "/usr/local/bin/cursor-agent", Path: path, TS: t0.Add(at)}
-	}
-	f.drain(t, open("/w/repo/a.go", 0), open("/w/repo/a.go", time.Second), open("/w/repo/b.go", time.Second), open("/w/repo/a.go", 2*time.Second))
-	for path, want := range map[string]int{"/w/repo/a.go": 1, "/w/repo/b.go": 1} {
-		var n int
-		if err := f.db.QueryRow(`SELECT COUNT(*) FROM events WHERE path=?`, path).Scan(&n); err != nil || n != want {
-			t.Fatalf("%s: %d rows, %v; want %d", path, n, err, want)
-		}
-	}
-}

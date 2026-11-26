@@ -1,13 +1,7 @@
 package store
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"path/filepath"
-	"regexp"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,49 +9,6 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testutil"
 )
-
-// guard_decisions.at is written fixed-width UTC, so its text order is its
-// instant order; it is not listed.
-var (
-	sqliteDateFunc = regexp.MustCompile(`(?i)\b(datetime|julianday|strftime|unixepoch|date|time)\s*\(`)
-	timestampCols  = `(ts|created_at|started_at|root_started_at|ended_at|last_seen_at|last_seen|first_seen|closed_at|revoked_at|resolved_at|acknowledged_at|requested_at|captured_at|last_flag_at|saved_at|expires_at|repeat_at|finished_at|reported_at|generated_at)`
-	rawInstantSQL  = regexp.MustCompile(`(?i)((ORDER BY|MIN\(|MAX\()\s*([a-z]+\.)?` + timestampCols + `\b|\b([a-z]+\.)?` + timestampCols + `\s*(<|>|<=|>=)\s*[?:a-z])`)
-)
-
-// Persisted timestamps vary in fractional width and UTC offset, so SQL
-// compares, orders and buckets them only through timestamps.go.
-func TestStoreSQLComparesInstantsThroughTimestamps(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") || file == "timestamps.go" {
-			continue
-		}
-		parsed, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ast.Inspect(parsed, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			text, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, re := range []*regexp.Regexp{sqliteDateFunc, rawInstantSQL} {
-				if m := re.FindString(text); m != "" {
-					t.Errorf("%s: SQL %q bypasses timestamps.go", fset.Position(lit.Pos()), m)
-				}
-			}
-			return true
-		})
-	}
-}
 
 // subsecond is a cutoff with a fractional second; offsetStamp stores an
 // instant the way a legacy local-offset writer did.

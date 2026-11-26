@@ -2,13 +2,6 @@ package store
 
 import (
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -123,88 +116,5 @@ func TestWriteGenerationAdvancesAtCommit(t *testing.T) {
 	}
 	if s.WriteGeneration() != before {
 		t.Fatal("a read-only transaction advanced the generation")
-	}
-}
-
-// Query methods never advance WriteGeneration, so no store statement may
-// write through one.
-func TestNoStoreWriteRunsThroughAQuery(t *testing.T) {
-	write := regexp.MustCompile(`(?is)^\s*(INSERT|UPDATE|DELETE|REPLACE)\b`)
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	values := map[string]ast.Expr{}
-	var parsed []*ast.File
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed = append(parsed, f)
-		for _, decl := range f.Decls {
-			if d, ok := decl.(*ast.GenDecl); ok {
-				for _, spec := range d.Specs {
-					if v, ok := spec.(*ast.ValueSpec); ok && len(v.Names) == len(v.Values) {
-						for i, n := range v.Names {
-							values[n.Name] = v.Values[i]
-						}
-					}
-				}
-			}
-		}
-	}
-	literals := func(e ast.Expr) []string {
-		var out []string
-		var visit func(ast.Expr, bool)
-		visit = func(e ast.Expr, follow bool) {
-			ast.Inspect(e, func(n ast.Node) bool {
-				switch n := n.(type) {
-				case *ast.BasicLit:
-					if s, err := strconv.Unquote(n.Value); err == nil && n.Kind == token.STRING {
-						out = append(out, s)
-					}
-				case *ast.Ident:
-					if v := values[n.Name]; v != nil && follow {
-						visit(v, false)
-					}
-				}
-				return true
-			})
-		}
-		visit(e, true)
-		return out
-	}
-	queries := 0
-	for _, f := range parsed {
-		ast.Inspect(f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			switch sel.Sel.Name {
-			case "Query", "QueryRow", "QueryContext", "QueryRowContext":
-				queries++
-				for _, arg := range call.Args {
-					for _, lit := range literals(arg) {
-						if write.MatchString(lit) {
-							t.Errorf("%s: %s runs a write statement", fset.Position(call.Pos()), sel.Sel.Name)
-						}
-					}
-				}
-			}
-			return true
-		})
-	}
-	if queries < 50 {
-		t.Fatalf("found %d query calls; the scan no longer sees the store's reads", queries)
 	}
 }

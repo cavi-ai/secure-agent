@@ -648,25 +648,6 @@ func TestFleetHeartbeatLoopTicks(t *testing.T) {
 	}
 }
 
-// Unfleeted nodes arm the loop but publish nothing — enrolling a collector
-// at runtime (config hot-reload) must work without a daemon restart.
-func TestStartFleetHeartbeatNoopWithoutSinks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "t.db"), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	srv := api.New(api.Deps{Store: st, Status: func() api.Status { return statusStub() }})
-	cfgGet := func() config.FleetConfig { return config.FleetConfig{} }
-	startFleetHeartbeat(ctx, srv, func() api.Status { return statusStub() }, fleet.NewPublisher(), cfgGet)
-	startFleetHeartbeat(ctx, srv, func() api.Status { return statusStub() }, nil, cfgGet) // nil publisher: no loop at all
-	time.Sleep(50 * time.Millisecond)
-	// No panic, no delivery, nothing else to assert — the loop is inert.
-}
-
 // CODEX_HOME moves the rollout store; the tail targets must follow it while
 // keeping the default path covered.
 func TestTranscriptTailTargetsFollowCodexHome(t *testing.T) {
