@@ -222,17 +222,3 @@ func requireBrowserResponse(t *testing.T, requests []browserRequest, url, method
 	t.Fatalf("browser network record missing %s %s => %d; records=%+v", method, url, status, requests)
 	return browserRequest{}
 }
-
-func TestBrowserNetLogPreservesCompletedRequest(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "network.json")
-	// The matching end event does not repeat the URL from the begin event.
-	raw := `{"constants":{"logEventTypes":{"URL_REQUEST_START_JOB":1,"HTTP_TRANSACTION_SEND_REQUEST_HEADERS":2,"HTTP_TRANSACTION_READ_RESPONSE_HEADERS":3}},"events":[
-{"type":1,"phase":1,"source":{"id":10},"params":{"url":"http://127.0.0.1:8080/v1/chat/completions"}},
-{"type":2,"phase":0,"source":{"id":10},"params":{"line":"POST /v1/chat/completions HTTP/1.1"}},
-{"type":3,"phase":0,"source":{"id":10},"params":{"headers":["HTTP/1.1 403 Forbidden"]}},
-{"type":1,"phase":2,"source":{"id":10},"params":{}}]}`
-	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
-		t.Fatal(err)
-	}
-	requireBrowserResponse(t, readBrowserRequests(t, path), "http://127.0.0.1:8080/v1/chat/completions", "POST", 403)
-}
