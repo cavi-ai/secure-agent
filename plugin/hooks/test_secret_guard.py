@@ -20,6 +20,7 @@ import threading
 import time
 import shutil
 from unittest.mock import patch
+from urllib.parse import quote
 
 from test_hook_lifecycle import running_app
 
@@ -364,11 +365,43 @@ def test_read_state_dir_allows():
     assert out.get("permission") == "allow", out
 
 
+def test_state_path_resolves_relative_to_request_cwd():
+    with patch.object(secret_guard, "_PAYLOAD", {"cwd": os.path.join(HOME, "workspace")}):
+        assert secret_guard.is_guard_state_path("../.local/state/secure-agent/events.db")
+        assert not secret_guard.is_guard_state_path(".local/state/secure-agent/events.db")
+
+
+def test_guard_state_dd_checks_the_output_operand():
+    state_file = os.path.join(HOME, ".local/state/secure-agent/events.db")
+    argv = ["dd", f"of={state_file}"]
+    verdict = secret_guard.rule_guard_state_mutation(
+        secret_guard.SegmentContext(argv, "", (), "dd", "", 0, []),
+    )
+    assert verdict is not None and verdict.rule == "guard-state-mutation", verdict
+    argv = ["dd", f"if={state_file}", f"of={os.path.join(HOME, 'copy.db')}"]
+    assert secret_guard.rule_guard_state_mutation(
+        secret_guard.SegmentContext(argv, "", (), "dd", "", 0, []),
+    ) is None
+
+
+def test_sqlite_allows_copies_outside_guard_state():
+    separate_tree = os.path.join(HOME, "backup/.local/state/secure-agent/events.db")
+    sibling = os.path.join(HOME, ".local/state/secure-agent.backup/events.db")
+    for cmd in (f'sqlite3 "{separate_tree}" "select 1"',
+                f'sqlite3 "file:{quote(sibling)}?mode=ro" "select 1"',
+                f'''sqlite3 :memory: "attach '{sibling}' as backup"'''):
+        out = run(bash(cmd))
+        assert out.get("permission") == "allow", (cmd, out)
+
+
 EXTRA_TESTS = [
     test_read_monitor_default_allows,
     test_read_deny_override_blocks,
     test_read_unknown_allows,
     test_read_state_dir_allows,
+    test_state_path_resolves_relative_to_request_cwd,
+    test_guard_state_dd_checks_the_output_operand,
+    test_sqlite_allows_copies_outside_guard_state,
 ]
 
 

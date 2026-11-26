@@ -48,7 +48,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import NamedTuple
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 # A symlinked hook (plugin/install.sh) loads its data files from the checkout.
 _HOOK_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -378,12 +378,17 @@ def is_guard_control_path(token: str) -> bool:
 # The daemon's evidence store, the hook activity log and the run record.
 # Agents may read here; writes are denied.
 GUARD_STATE_DIR = os.path.join(HOME, ".local", "state", "secure-agent")
-# The state directory named inside a larger token: SQL text, a file: URI, inline code.
+# The state directory named inside inline interpreter code.
 GUARD_STATE_REF_RE = re.compile(r"/\.local/state/secure-agent(?![\w-])", re.I)
 
 
 def is_guard_state_path(token: str) -> bool:
-    p = norm(token).lower()
+    p = norm(token)
+    if not p:
+        return False
+    if not os.path.isabs(p):
+        p = os.path.normpath(os.path.join(_cwd_for_request(), p))
+    p = p.lower()
     d = GUARD_STATE_DIR.lower()
     return p == d or p.startswith(d + os.sep)
 
@@ -2318,24 +2323,83 @@ def _state_read_form(name: str, args: list) -> bool:
     return False
 
 
+_SQLITE_VALUE_OPTIONS = {
+    "cmd", "escape", "init", "maxsize", "mmap", "newline",
+    "nonce", "nullvalue", "separator", "vfs",
+}
+_SQLITE_STRING = re.compile(r"'(?:[^']|'')*'" r'|"(?:[^"]|"")*"')
+
+
+def _sqlite_filename(value: str) -> str:
+    if value.startswith("file:"):
+        try:
+            uri = urlsplit(value)
+        except ValueError:
+            return ""
+        value = unquote(uri.path) if uri.netloc.lower() in ("", "localhost") else ""
+    return "" if value == ":memory:" else value
+
+
+def _sqlite_statement_paths(statement: str):
+    statement = statement.lstrip()
+    if statement.startswith("."):
+        try:
+            yield from shlex.split(statement)[1:]
+        except ValueError:
+            pass
+        return
+    for match in _SQLITE_STRING.finditer(statement):
+        quoted = match.group()
+        yield quoted[1:-1].replace(quoted[0] * 2, quoted[0])
+
+
+def _sqlite_paths(args: list):
+    tokens = iter(args)
+    options = True
+    database_seen = False
+    for token in tokens:
+        if options and token == "--":
+            options = False
+        elif options and token.startswith("-") and token != "-":
+            option = token.lstrip("-")
+            if option in ("lookaside", "pagecache"):
+                next(tokens, None)
+                next(tokens, None)
+            elif option in _SQLITE_VALUE_OPTIONS:
+                value = next(tokens, "")
+                if option == "cmd":
+                    yield from _sqlite_statement_paths(value)
+        elif not database_seen:
+            database_seen = True
+            yield token
+        else:
+            yield from _sqlite_statement_paths(token)
+
+
 # 3a. Writes under the state directory: mutators, sqlite3 on the store,
 #     find -delete/-exec with a mutator, and xargs feeding a mutator.
 def rule_guard_state_mutation(seg: SegmentContext) -> Verdict | None:
     argv, name = seg.argv, seg.name
     args = argv[1:]
-    state = [t for t in args if is_guard_state_path(t)]
-    if name in MUTATORS and state and not _state_read_form(name, args):
-        return state_denied(state[0])
+    if name in MUTATORS:
+        paths = (arg[3:] for arg in args if arg.startswith("of=")) if name == "dd" else args
+        state = next((path for path in paths if is_guard_state_path(path)), None)
+        if state is not None and not _state_read_form(name, args):
+            return state_denied(state)
     if name == "sqlite3":
-        for tok in args:
-            if is_guard_state_path(tok) or GUARD_STATE_REF_RE.search(tok):
-                return state_denied(tok, STATE_SQLITE_REPLY)
-    if name == "find" and state:
+        for value in _sqlite_paths(args):
+            path = _sqlite_filename(value)
+            if is_guard_state_path(path):
+                return state_denied(path, STATE_SQLITE_REPLY)
+    if name == "find":
+        state = next((path for path in args if is_guard_state_path(path)), None)
         exec_words = [args[i + 1] for i, a in enumerate(args[:-1])
                       if a in ("-exec", "-execdir", "-ok")]
-        if "-delete" in args or any(os.path.basename(w) in MUTATORS or os.path.basename(w) == "sqlite3"
-                                    for w in exec_words):
-            return state_denied(state[0])
+        if state is not None and ("-delete" in args or any(
+            os.path.basename(w) in MUTATORS or os.path.basename(w) == "sqlite3"
+            for w in exec_words
+        )):
+            return state_denied(state)
     if name == "xargs":
         subcmds = [t for t in args if not t.startswith("-")]
         if any(os.path.basename(t) in MUTATORS for t in subcmds):
