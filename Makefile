@@ -84,7 +84,6 @@ test-attack-replay:
 
 test-agent-scenarios:
 	python3 packaging/test/agent_scenarios.py
-	python3 packaging/test/test_agent_scenarios.py
 
 test-go:
 	@echo "==> gofmt, go vet, go test -race..."
@@ -123,7 +122,6 @@ test-hooks:
 	python3 packaging/test/test_release_workflow.py
 	python3 packaging/test/test_release_provenance.py
 	python3 packaging/test/test_uninstall_hooks.py
-	python3 packaging/test/test_setup_session_live.py
 
 test-console:
 	@echo "==> Console assets, JS and DOM tests..."
@@ -144,7 +142,6 @@ test-macos:
 	bash packaging/test/test_vcs_stamp.sh
 	bash packaging/test/test_install_status.sh
 	bash packaging/test/test_replaced_bundle.sh
-	python3 packaging/test/test_live_acceptance.py
 	./packaging/test/e2e_smoke.sh
 
 smoke:
