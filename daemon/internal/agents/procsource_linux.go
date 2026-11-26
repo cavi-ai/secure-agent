@@ -72,7 +72,7 @@ func (p *ProcProcSource) List() []ProcInfo {
 			continue
 		}
 		ppid, comm, start, cpu := parseProcStat(string(raw), boot, hz)
-		res = append(res, ProcInfo{PID: int32(pid), PPID: ppid, Comm: comm, StartTime: start, CPUTime: cpu})
+		res = append(res, ProcInfo{PID: int32(pid), PPID: ppid, PGID: statPGID(string(raw)), Comm: comm, StartTime: start, CPUTime: cpu})
 	}
 	return res
 }
@@ -98,6 +98,7 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 	return ProcInfo{
 		PID:            pid,
 		PPID:           ppid,
+		PGID:           statPGID(string(raw)),
 		Comm:           comm,
 		Exe:            exe,
 		RuntimeProgram: program,
@@ -106,6 +107,24 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 		CPUTime:        cpu,
 		CWD:            cwd,
 	}, true
+}
+
+// statPGID reads the process group, field 5 of /proc/<pid>/stat; 0 when
+// unreadable.
+func statPGID(stat string) int32 {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return 0
+	}
+	rest := strings.Fields(stat[end+1:])
+	if len(rest) < 3 {
+		return 0
+	}
+	v, err := strconv.ParseInt(rest[2], 10, 32)
+	if err != nil {
+		return 0
+	}
+	return int32(v)
 }
 
 func readRSS(pid int32) uint64 {

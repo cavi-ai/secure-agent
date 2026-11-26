@@ -39,6 +39,7 @@ func (d *DarwinProcSource) List() []ProcInfo {
 		res = append(res, ProcInfo{
 			PID:       kp.Proc.P_pid,
 			PPID:      kp.Eproc.Ppid,
+			PGID:      kp.Eproc.Pgid,
 			Comm:      commStr,
 			Exe:       "", // Lazy populated on demand by tagger for candidates
 			StartTime: timevalToTime(kp.Proc.P_starttime),
@@ -50,11 +51,11 @@ func (d *DarwinProcSource) List() []ProcInfo {
 func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	args := procArgs2(pid)
 	exe := procPath(args)
-	ppid := int32(0)
+	ppid, pgid := int32(0), int32(0)
 	commStr := ""
 	start := time.Time{}
 	if kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid)); err == nil {
-		ppid = kp.Eproc.Ppid
+		ppid, pgid = kp.Eproc.Ppid, kp.Eproc.Pgid
 		commBuf := make([]byte, len(kp.Proc.P_comm))
 		for i, c := range kp.Proc.P_comm {
 			commBuf[i] = byte(c)
@@ -82,6 +83,7 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	return ProcInfo{
 		PID:            pid,
 		PPID:           ppid,
+		PGID:           pgid,
 		Comm:           commStr,
 		Exe:            exe,
 		RuntimeProgram: program,

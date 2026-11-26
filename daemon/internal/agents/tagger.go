@@ -11,6 +11,8 @@ import (
 type ProcInfo struct {
 	PID  int32
 	PPID int32
+	// PGID is the process group id, 0 when unread.
+	PGID int32
 	Comm string
 	Exe  string
 	// RuntimeProgram is a Node entry point, never its arguments or environment.
@@ -62,7 +64,10 @@ type Tagger struct {
 	// lineage holds the agent family each process joined by fork or exec,
 	// as Endpoint Security reported it; it outlives the parents that exited.
 	lineage map[int32]lineageRecord
-	now     func() time.Time
+	// firstRootStart is the earliest start of a family root a match named
+	// since New; it never moves later, even after that family exits.
+	firstRootStart time.Time
+	now            func() time.Time
 	// onTagged is told, after Refresh releases mu, about each pid that
 	// Refresh tagged which was not tagged before the call.
 	onTagged func(pid int32, info AgentInfo)
@@ -360,6 +365,8 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 // LiveAgentFamily checks whether pid should be treated as an agent for API
 // authorization. A tracked agent stays restricted. Confirming a non-agent
 // requires a complete live walk, independent of cached telemetry misses.
+// A walk through a launchd-parented process that does not lead its process
+// group and started no earlier than the first matched family root is not known.
 func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -388,6 +395,11 @@ func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 		}
 		if p.PPID == 0 {
 			return false, true
+		}
+		// Adopted by launchd, not its group's leader, started since the first family root.
+		if p.PPID == 1 && p.PGID != 0 && p.PGID != p.PID &&
+			!t.firstRootStart.IsZero() && !p.StartTime.Before(t.firstRootStart) {
+			return false, false
 		}
 		pid = p.PPID
 	}
@@ -523,6 +535,9 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 				RootPID:   root,
 				rootStart: t.table[root].StartTime,
 				sampledAt: t.now(),
+			}
+			if s := res.rootStart; !s.IsZero() && (t.firstRootStart.IsZero() || s.Before(t.firstRootStart)) {
+				t.firstRootStart = s
 			}
 			t.cache[pid] = res
 			t.tagged[pid] = true
