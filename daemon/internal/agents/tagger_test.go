@@ -91,6 +91,106 @@ func TestLiveAgentFamilyRequiresCompleteAncestry(t *testing.T) {
 	}
 }
 
+// A launchd-parented process that does not lead its process group and started
+// after a matched family root, or any descendant of one, is not known.
+func TestLiveAgentFamilyDetachedProcess(t *testing.T) {
+	t0 := time.Unix(1_800_000_000, 0)
+	cfg := config.Config{Agents: []config.AgentDef{{Name: "harness", Match: []string{"/bin/harness"}}}}
+	launchd := ProcInfo{PID: 1, PGID: 1, Comm: "launchd", Exe: "/sbin/launchd", StartTime: t0.Add(-time.Hour)}
+	root := ProcInfo{PID: 100, PPID: 1, PGID: 100, Exe: "/bin/harness", StartTime: t0}
+	detached := ProcInfo{PID: 300, PPID: 1, PGID: 200, Exe: "/bin/sleep", StartTime: t0.Add(time.Second)}
+	child := ProcInfo{PID: 301, PPID: 300, PGID: 200, Exe: "/bin/cat", StartTime: t0.Add(2 * time.Second)}
+	early := detached
+	early.StartTime = t0.Add(-time.Second)
+	unread := detached
+	unread.PGID = 0
+	leader := ProcInfo{PID: 400, PPID: 1, PGID: 400, Exe: "/Applications/Browser.app/Contents/MacOS/Browser", StartTime: t0.Add(time.Second)}
+	terminal := ProcInfo{PID: 500, PPID: 1, PGID: 500, Exe: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", StartTime: t0.Add(time.Second)}
+	shell := ProcInfo{PID: 501, PPID: 500, PGID: 501, Exe: "/bin/zsh", StartTime: t0.Add(2 * time.Second)}
+	command := ProcInfo{PID: 502, PPID: 501, PGID: 502, Exe: "/usr/bin/make", StartTime: t0.Add(3 * time.Second)}
+
+	for _, tc := range []struct {
+		name         string
+		procs        []ProcInfo
+		rootExits    bool
+		pid          int32
+		agent, known bool
+	}{
+		{"adopted non-leader started after the root", []ProcInfo{launchd, root, detached}, false, 300, false, false},
+		{"child of an adopted non-leader", []ProcInfo{launchd, root, detached, child}, false, 301, false, false},
+		{"adopted non-leader after the root exits", []ProcInfo{launchd, root, detached}, true, 300, false, false},
+		{"no family root matched", []ProcInfo{launchd, detached}, false, 300, false, true},
+		{"adopted non-leader started before the root", []ProcInfo{launchd, root, early}, false, 300, false, true},
+		{"adopted group leader started after the root", []ProcInfo{launchd, root, leader}, false, 400, false, true},
+		{"command in a terminal shell", []ProcInfo{launchd, root, terminal, shell, command}, false, 502, false, true},
+		{"unread process group", []ProcInfo{launchd, root, unread}, false, 300, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			procs := fakeProcs{}
+			for _, p := range tc.procs {
+				procs[p.PID] = p
+			}
+			tg := New(cfg, procs)
+			tg.Refresh()
+			if tc.rootExits {
+				delete(procs, root.PID)
+				tg.Refresh()
+			}
+			if agent, known := tg.LiveAgentFamily(tc.pid); agent != tc.agent || known != tc.known {
+				t.Fatalf("LiveAgentFamily(%d) = (%v, %v), want (%v, %v)", tc.pid, agent, known, tc.agent, tc.known)
+			}
+		})
+	}
+}
+
+func TestDetachedAuthorizationUsesEnabledAgentDefinitions(t *testing.T) {
+	t0 := time.Unix(1_800_000_000, 0)
+	procs := fakeProcs{
+		1:   {PID: 1, Exe: "/sbin/init", StartTime: t0.Add(-time.Hour)},
+		100: {PID: 100, PPID: 1, PGID: 100, Exe: "/bin/model-server", StartTime: t0},
+		200: {PID: 200, PPID: 1, PGID: 200, Exe: "/bin/harness", StartTime: t0},
+		300: {PID: 300, PPID: 1, PGID: 250, Exe: "/bin/maintenance", StartTime: t0.Add(time.Second)},
+	}
+	infra := config.AgentDef{Name: "model-server", Kind: config.AgentKindInfra, Match: []string{"/bin/model-server"}}
+	agent := config.AgentDef{Name: "harness", Match: []string{"/bin/harness"}}
+	tg := New(config.Config{Agents: []config.AgentDef{infra}}, procs)
+	tg.Refresh()
+
+	check := func(stage string, wantKnown bool) {
+		t.Helper()
+		if isAgent, known := tg.LiveAgentFamily(300); isAgent || known != wantKnown {
+			t.Errorf("%s: maintenance job = (%v, %v), want (false, %v)", stage, isAgent, known, wantKnown)
+		}
+	}
+	check("infrastructure only", true)
+	if isAgent, known := tg.LiveAgentFamily(100); !isAgent || !known {
+		t.Errorf("matched infrastructure = (%v, %v), want (true, true)", isAgent, known)
+	}
+	tg.SetAgents([]config.AgentDef{infra, agent})
+	delete(procs, 200)
+	tg.SetAgents([]config.AgentDef{agent})
+	check("agent still enabled after it exits", false)
+	tg.SetAgents([]config.AgentDef{infra})
+	check("agent disabled", true)
+	tg.SetAgents([]config.AgentDef{infra, agent})
+	check("agent reenabled without a fresh observation", true)
+}
+
+func TestDetachedAuthorizationRecordsLiveOnlyMatch(t *testing.T) {
+	procs := lineageProcs()
+	job := procs[900]
+	job.PGID = 700
+	procs[900] = job
+	tg := New(lineageConfig(), procs)
+	if agent, known := tg.LiveAgentFamily(500); !agent || !known {
+		t.Fatalf("live root = (%v, %v), want (true, true)", agent, known)
+	}
+	delete(procs, 500)
+	if agent, known := tg.LiveAgentFamily(900); agent || known {
+		t.Errorf("detached job after a live root observation = (%v, %v), want (false, false)", agent, known)
+	}
+}
+
 func TestParentPID(t *testing.T) {
 	fake := fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex"},

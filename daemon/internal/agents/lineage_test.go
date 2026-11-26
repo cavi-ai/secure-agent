@@ -289,6 +289,29 @@ func TestLineageAgentExecSeedsFamilyWithoutARefresh(t *testing.T) {
 	assertJobIsClaude(t, tg)
 }
 
+func TestDetachedAuthorizationRecordsEndpointSecurityRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		note Lineage
+	}{
+		{"exec", Lineage{ParentPID: 1, ChildPID: 500, ChildStart: lineageStart, ExecPath: "/usr/local/bin/claude", At: lineageStart}},
+		{"fork", Lineage{ParentPID: 500, ParentStart: lineageStart, ParentExe: "/usr/local/bin/claude", ChildPID: 600, ChildStart: lineageAt(1), At: lineageAt(1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			procs := lineageProcs()
+			delete(procs, 500)
+			job := procs[900]
+			job.PGID = 700
+			procs[900] = job
+			tg := New(lineageConfig(), procs)
+			tg.NoteLineage(tc.note)
+			if agent, known := tg.LiveAgentFamily(900); agent || known {
+				t.Errorf("detached job after an Endpoint Security root observation = (%v, %v), want (false, false)", agent, known)
+			}
+		})
+	}
+}
+
 func TestLineageRootCanBeNewerThanTheLastSample(t *testing.T) {
 	procs := lineageProcs()
 	procs[500] = ProcInfo{PID: 500, PPID: 1, Exe: "/bin/cat", StartTime: lineageAt(-5)}

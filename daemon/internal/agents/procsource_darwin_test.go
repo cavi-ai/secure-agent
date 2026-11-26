@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestProcArgvStopsBeforeEnvironment(t *testing.T) {
@@ -88,6 +90,27 @@ func TestSelfStartTimeAndRSS(t *testing.T) {
 	if !filepath.IsAbs(info.CWD) {
 		t.Fatalf("CWD is not absolute: %q", info.CWD)
 	}
+}
+
+func TestDarwinSourceReportsProcessGroup(t *testing.T) {
+	self, want := int32(os.Getpid()), int32(unix.Getpgrp())
+	if want == 0 {
+		t.Fatal("getpgrp returned 0")
+	}
+	src := NewDarwinProcSource()
+	info, ok := src.Info(self)
+	if !ok || info.PGID != want {
+		t.Fatalf("Info(self).PGID = %d (ok=%v), want %d", info.PGID, ok, want)
+	}
+	for _, p := range src.List() {
+		if p.PID == self {
+			if p.PGID != want {
+				t.Fatalf("List entry for self: PGID = %d, want %d", p.PGID, want)
+			}
+			return
+		}
+	}
+	t.Fatal("List has no entry for this process")
 }
 
 func TestDarwinArgv0ReadsOwnArgv0(t *testing.T) {

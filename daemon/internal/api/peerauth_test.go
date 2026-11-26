@@ -7,11 +7,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 )
 
@@ -525,6 +528,119 @@ func TestGateLiveAgentFamilyIsAgentOnEveryRoute(t *testing.T) {
 			}
 			if code, _ := do(call{http.MethodGet, "/status", ""}); code != http.StatusOK {
 				t.Errorf("unknown family GET /status: %d, want 200", code)
+			}
+		})
+	}
+}
+
+// familyProcs is a fixed process table for agents.Tagger.
+type familyProcs map[int32]agents.ProcInfo
+
+func (f familyProcs) List() []agents.ProcInfo {
+	res := make([]agents.ProcInfo, 0, len(f))
+	for _, p := range f {
+		res = append(res, p)
+	}
+	return res
+}
+
+func (f familyProcs) Info(pid int32) (agents.ProcInfo, bool) {
+	p, ok := f[pid]
+	return p, ok
+}
+
+// peerShapeTagger returns a tagger that has tagged the agent root peer+1 and
+// sees peer, started after that root, as one of three shapes: "adopted"
+// (launchd parent, not its group's leader), "leader" (launchd parent, its
+// group's leader) or "terminal" (a command under a shell in a terminal app).
+func peerShapeTagger(t *testing.T, peer int32, shape string) *agents.Tagger {
+	t.Helper()
+	t0 := time.Unix(1_800_000_000, 0)
+	root, shell, term, starter := peer+1, peer+2, peer+3, peer+4
+	procs := familyProcs{
+		1:    {PID: 1, PGID: 1, Comm: "launchd", Exe: "/sbin/launchd", StartTime: t0.Add(-time.Hour)},
+		root: {PID: root, PPID: 1, PGID: root, Exe: "/usr/local/bin/harness", StartTime: t0},
+	}
+	switch shape {
+	case "adopted":
+		procs[peer] = agents.ProcInfo{PID: peer, PPID: 1, PGID: starter, Exe: "/usr/local/bin/tool", StartTime: t0.Add(time.Second)}
+	case "leader":
+		procs[peer] = agents.ProcInfo{PID: peer, PPID: 1, PGID: peer, Exe: "/Applications/Browser.app/Contents/MacOS/Browser", StartTime: t0.Add(time.Second)}
+	case "terminal":
+		procs[term] = agents.ProcInfo{PID: term, PPID: 1, PGID: term, Exe: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", StartTime: t0.Add(time.Second)}
+		procs[shell] = agents.ProcInfo{PID: shell, PPID: term, PGID: shell, Exe: "/bin/zsh", StartTime: t0.Add(2 * time.Second)}
+		procs[peer] = agents.ProcInfo{PID: peer, PPID: shell, PGID: peer, Exe: "/usr/local/bin/tool", StartTime: t0.Add(3 * time.Second)}
+	default:
+		t.Fatalf("unknown shape %q", shape)
+	}
+	tg := agents.New(config.Config{Agents: []config.AgentDef{{Name: "harness", Match: []string{"/usr/local/bin/harness"}}}}, procs)
+	tg.Refresh()
+	if _, tagged := tg.Tag(root); !tagged {
+		t.Fatal("agent root not tagged")
+	}
+	return tg
+}
+
+// With the real tagger, an owner-uid peer adopted by launchd, not leading its
+// process group and started after an agent root, gets the gate's 403 on routes
+// closed to agents; a command in a terminal shell keeps owner access.
+func TestGateLiveTaggerAdoptedPeer(t *testing.T) {
+	const gateRefusal = "requires a more privileged client"
+	self := int32(os.Getpid())
+	type call struct{ method, path, body string }
+	pinned := []call{
+		{http.MethodPost, "/daemon/stop-intent", ""},
+		{http.MethodPost, "/notify/rules", `{"rule":"keychain-access","notify":false}`},
+		{http.MethodDelete, "/guard/rules?agent=x&rule_id=y", ""},
+	}
+	headless := append([]call{
+		{http.MethodPost, "/guard/resolve", `{"id":"x","verdict":"allow","scope":"once"}`},
+		{http.MethodPost, "/kill", `{"pid":42}`},
+	}, pinned...)
+	dir := t.TempDir()
+	for i, tc := range []struct {
+		name    string
+		shape   string
+		uiPID   int32
+		calls   []call
+		refused bool
+	}{
+		{"adopted non-leader beside a pinned UI", "adopted", self + 9999, pinned, true},
+		{"adopted non-leader headless", "adopted", 0, headless, true},
+		{"terminal command beside a pinned UI", "terminal", self + 9999, pinned, false},
+		{"terminal command headless", "terminal", 0, headless, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := filepath.Join(dir, fmt.Sprintf("%d.sock", i))
+			fk := &fakeKiller{}
+			deps := Deps{SocketPath: sock, Store: testStore(t), Killer: fk, Status: func() Status { return Status{Running: true} }, Guard: GuardDeps{Broker: newTestBroker()}}
+			deps.StopIntent = func() (time.Time, time.Time, error) { return time.Now(), time.Now().Add(time.Minute), nil }
+			deps.Peers.Checker = loopbackChecker{NewPeerChecker()}
+			deps.Peers.AgentPIDs = func() map[int32]struct{} { return nil }
+			deps.Peers.IsAgentPID = peerShapeTagger(t, self, tc.shape).LiveAgentFamily
+			a := newTestAPI(deps)
+			a.peerRole.UIPID = tc.uiPID
+			ctx, cancel := contextWithCancel()
+			defer cancel()
+			go a.Serve(ctx)
+			waitForSocket(t, sock)
+			cl := unixClient(sock)
+			for _, c := range tc.calls {
+				req, _ := http.NewRequest(c.method, "http://unix"+c.path, strings.NewReader(c.body))
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := cl.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				gateRefused := resp.StatusCode == http.StatusForbidden && strings.Contains(string(b), gateRefusal)
+				if gateRefused != tc.refused {
+					t.Errorf("%s %s: %d %q, gate refusal %v, want %v", c.method, c.path, resp.StatusCode, strings.TrimSpace(string(b)), gateRefused, tc.refused)
+				}
+			}
+			if tc.refused && fk.killed != 0 {
+				t.Fatal("killer fired for a refused peer")
 			}
 		})
 	}

@@ -91,6 +91,34 @@ func TestConsoleMutationGateLetsNonAgentsThrough(t *testing.T) {
 	}
 }
 
+// With the real tagger, a console peer adopted by launchd, not leading its
+// process group and started after an agent root, gets the gate's 503; an
+// adopted group leader started after that root reaches the handler.
+func TestConsoleGateLiveTaggerAdoptedPeer(t *testing.T) {
+	const peer = 777
+	const unidentified = "the connecting process could not be identified"
+	for _, tc := range []struct {
+		shape   string
+		refused bool
+	}{
+		{"adopted", true},
+		{"leader", false},
+	} {
+		deps := fileTestDeps(t)
+		deps.Guard = GuardDeps{Broker: newTestBroker()}
+		deps.System.TCPClientPID = func(string) (int32, error) { return peer, nil }
+		deps.Peers.IsAgentPID = peerShapeTagger(t, peer, tc.shape).LiveAgentFamily
+		h := newTestAPI(deps).ConsoleHandler()
+		code, body := serveConsole(h, http.MethodPost, "/guard/resolve")
+		if tc.refused && (code != http.StatusServiceUnavailable || !strings.Contains(body, unidentified)) {
+			t.Errorf("%s peer POST /guard/resolve: %d %q, want the gate's 503", tc.shape, code, strings.TrimSpace(body))
+		}
+		if !tc.refused && (code == http.StatusServiceUnavailable || code == http.StatusForbidden) {
+			t.Errorf("%s peer POST /guard/resolve: %d %q, want the handler's answer", tc.shape, code, strings.TrimSpace(body))
+		}
+	}
+}
+
 // A peer the daemon cannot identify is refused a mutation with a retryable
 // 503, never served.
 func TestConsoleMutationGateRefusesUnidentifiedPeers(t *testing.T) {
