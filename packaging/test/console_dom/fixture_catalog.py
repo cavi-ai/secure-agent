@@ -809,11 +809,6 @@ FIXTURES = {
         payload=lambda: payload_cases.running_worktree_removal(),
         served=False,
     ),
-    'dom_wtcadence': Fixture(
-        query='?tab=worktrees&removecadence',
-        scenarios=('tab', 'tab=worktrees', 'removecadence'),
-        served=False,
-    ),
     'dom_clutteradvise': Fixture(
         query='?tab=system/clutter&clutteradvise',
         scenarios=('tab', 'tab=system/clutter', 'clutteradvise'),

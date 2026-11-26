@@ -26,6 +26,15 @@ func (s *Store) PutScanCache(name string, body []byte, at time.Time) {
 	}
 }
 
+// DeleteScanCache removes the named entry.
+func (s *Store) DeleteScanCache(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`DELETE FROM scan_cache WHERE name = ?`, name); err != nil {
+		log.Printf("store: delete scan cache %s: %v", name, err)
+	}
+}
+
 // ScanCache returns the named entry and when it was saved.
 func (s *Store) ScanCache(name string) ([]byte, time.Time, bool) {
 	var at string

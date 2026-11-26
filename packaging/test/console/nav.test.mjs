@@ -325,7 +325,7 @@ test('returning to a pending System report resumes bounded followup after its hi
     Object.assign(controller.worktreesState, { report: worktrees, loadedAt: Date.now(), ledger: {}, ledgerAt: Date.now() });
     Object.assign(controller.clutterState, { report: clutter, loadedAt: Date.now() });
   };
-  for (const [view,pending] of [['worktrees',{sizing:true}],['worktrees',{refreshing:true}],['worktrees',{asks:{task:{status:'running'}}}],['clutter',{sizing:true}],['clutter',{refreshing:true}]]) {
+  for (const [view,pending] of [['clutter',{sizing:true}],['clutter',{refreshing:true}]]) {
     fresh(view === 'worktrees' ? pending : {}, view === 'clutter' ? pending : {});
     reads.length = 0;
     runtime.switchTab('system/' + view);
@@ -339,7 +339,15 @@ test('returning to a pending System report resumes bounded followup after its hi
     await settle();
   }
   assert.equal(timers.size, 0);
-  for (const [view, url] of [['worktrees', '/worktrees'], ['clutter', '/cleanup']]) {
+  fresh({ sizing: true, refreshing: true, asks: { task: { status: 'running' } } }, {});
+  reads.length = 0;
+  runtime.switchTab('system/worktrees');
+  runtime.switchTab('system/resources');
+  runtime.switchTab('system/worktrees');
+  await settle();
+  assert.equal(timers.size, 0, 'a pending worktree report sets no timer');
+  assert.deepEqual(reads, [], 'a loaded worktree report is read again only on request');
+  for (const [view, url] of [['clutter', '/cleanup']]) {
     served[url] = { sizing: true };
     fresh(view === 'worktrees' ? { sizing: true } : {}, view === 'clutter' ? { sizing: true } : {});
     runtime.switchTab('system/' + view);
@@ -358,6 +366,5 @@ test('returning to a pending System report resumes bounded followup after its hi
   }
   controller.worktreesState.report = {removals:{path:{state:'running'}}};
   runtime.switchTab('system/worktrees'); runtime.switchTab('system/resources');
-  assert.equal(fire(), 1500);
-  assert.equal(reads.at(-1), 'worktrees', 'running removals retain their cross-view followup');
+  assert.equal(timers.size, 0, 'running removals in a report set no timer');
 });

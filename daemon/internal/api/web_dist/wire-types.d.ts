@@ -1749,6 +1749,7 @@ export interface Worktree {
   state: string;
   reasons: string[] | null;
   can_remove_reviewed?: boolean;
+  removal_identity?: string;
   reason_kinds: string[] | null;
   stale?: boolean;
   last_activity?: string;

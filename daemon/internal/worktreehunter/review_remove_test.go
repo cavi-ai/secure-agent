@@ -100,7 +100,7 @@ func TestRemoveReviewedRechecksIgnoredSecretsAfterMeasuring(t *testing.T) {
 			write(t, secret, "TOKEN=[REDACTED]\n")
 		}
 	}}
-	_, err = h.remove(ctx, wt, progress, &RemovalReview{Head: row.Head, Reasons: row.Reasons})
+	_, err = h.remove(ctx, wt, progress, RemovalOptions{Review: &RemovalReview{Head: row.Head, Reasons: row.Reasons}})
 	if !errors.Is(err, ErrReviewChanged) || !exists(secret) {
 		t.Fatalf("late ignored secret was not preserved: %v", err)
 	}

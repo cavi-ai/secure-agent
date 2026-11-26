@@ -1,38 +1,29 @@
-// Worktree Hunter and clutter: the two reports, their loaders and size
-// polling, the removal progress toast and the actions on both tabs.
+// Worktree Hunter and clutter: the two reports, their loaders, the clutter
+// size polling, the removal progress toast and the actions on both tabs.
 // createWorktreeController builds one state object; the worktreeCtl*
 // functions below read and write it.
 const WORKTREE_STALE_MS = 60000;
-// Worktrees are not telemetry: the tab fetches its report when opened
-// (the daemon caches a scan for 10 minutes) and on Rescan, never on the
-// refresh cycle.
+// Worktrees are not telemetry: the tab reads the report when the view opens
+// with none loaded, on Reload (the daemon's saved scan) and on Rescan (a new
+// scan); nothing reads it on a timer.
 const WORKTREE_TIMEOUT_MS = 200000;
-// While the daemon is still measuring sizes, the open tab re-reads the
-// cached report (cheap: no rescan) until the sizes land.
+// A removal answers in its own request: the daemon may wait for a running
+// scan, then bounds `git worktree remove` at 10 minutes.
+const WORKTREE_REMOVE_TIMEOUT_MS = WORKTREE_TIMEOUT_MS + 10 * 60 * 1000;
+// While the daemon is still measuring clutter sizes, the open tab re-reads
+// the cached inventory (cheap: no rescan) until the sizes land.
 const WORKTREE_SIZING_POLL_MS = 5000;
 const WORKTREE_SIZING_POLLS = 60;
-// Also while an agent ask runs: its answer lands in the report's asks.
-// While a removal runs, every 1.5 s and without a cap: the daemon bounds
-// a removal at 10 minutes.
-const WORKTREE_REMOVAL_POLL_MS = 1500;
-// Removal progress: one toast follows the removals this page started or
-// saw running (another tab, the CLI) from the first step to what they
-// reclaimed. A removal that starts after the group finished opens a new
-// group. The rows show the same progress, so hiding the toast loses
-// nothing.
+// Removal progress: one toast follows the removals this page sent, from the
+// request to its reply, and those a report read showed running (another
+// tab, the CLI) as of that read. A removal that starts after the group
+// finished opens a new group. The rows show the same progress, so hiding
+// the toast loses nothing.
 const WORKTREE_REMOVAL_TOAST_LINGER_MS = 8000;
 // The cleanup ledger: the daily series behind the reclaimed chart and the
 // entries behind the history drawer. Loaded with the tab, after a
 // cleanup lands, and when the history opens.
 const WORKTREE_LEDGER_LIMIT = 500;
-// Ask the local advisor for a note. The note is looked up on every GET, so
-// a few cheap re-reads of the cached report pick it up when the model
-// answers; no rescan. A group ask answers one row after another, so it
-// reads for longer.
-const WORKTREE_NOTE_POLLS = 6;
-// A group ask's notes arrive one by one (about 5-15 s each, up to 40 rows).
-const WORKTREE_GROUP_NOTE_POLLS = 60;
-const WORKTREE_NOTE_EVERY_MS = 10000;
 // Ask the local advisor for a project's cleanup plan; the plan arrives in
 // GET /cleanup's advice, re-read every 5 s for up to a minute.
 const WORKTREE_CLUTTER_PLAN_POLLS = 12;
@@ -41,17 +32,18 @@ const WORKTREE_CLUTTER_PLAN_EVERY_MS = 5000;
 function createWorktreeController({ request, toast, confirm, render, renderSelection = () => render(['worktrees']), markDirty, visible, now, history, discuss, toastHost }) {
   const s = {
     request, toast, confirm, render, renderSelection, markDirty, visible, now, history, discuss, toastHost,
-    worktreesState: { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
+    worktreesState: { report: null, loading: false, loadingRefresh: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
       ledger: null, ledgerLoading: false, ledgerAt: 0, selected: new Map(), expanded: new Set(), selectionBusy: false, pendingRemovalSelections: new Map() },
-    worktreeSizingTimer: null,
-    worktreeSizingFast: false,
-    worktreeSizingPolls: 0,
+    worktreeReloadQueued: false,
+    worktreeReportRevision: 0,
     removalGroup: { paths: [], labels: {}, hidden: false, finished: false },
     removalTicker: null,
     removalLinger: null,
-    // Every report read takes a number; only the newest read started may set
-    // the report, so a slow older read never overwrites a newer one.
-    reportReads: 0,
+    // The removals this page sent, by path: running until the reply, then
+    // its outcome. Every report read keeps them (overlayRemovals).
+    removals: new Map(),
+    // Batches of removals in progress; the toast's group ends after them.
+    removalBatches: 0,
     // Clutter: loaded with the tab like worktrees; re-read while sizes land.
     clutterState: { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set(), removing: new Set() },
     clutterSizingTimer: null,
@@ -98,37 +90,70 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
   };
 }
 
-const worktreeCtlRemovalRunning = rep => rep && Object.values(rep.removals || {}).some(r => r.state === 'running');
-
-function worktreeCtlFollowWorktreeSizing(s) {
-  const { worktreesState, visible } = s;
-  const rep = worktreesState.report;
-  const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
-  const removing = worktreeCtlRemovalRunning(rep);
-  // A running removal keeps the re-reads going on any tab: its toast
-  // follows it to the end.
-  if (!rep || !(rep.sizing || rep.refreshing || asking || removing)) return;
-  if (!removing && !visible('worktrees')) return;
-  if (s.worktreeSizingTimer) {
-    // A removal that starts while a sizing re-read waits gets its own
-    // cadence at once.
-    if (!removing || s.worktreeSizingFast) return;
-    clearTimeout(s.worktreeSizingTimer);
-  } else if (!removing) {
-    if (s.worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
-    s.worktreeSizingPolls++;
-  }
-  s.worktreeSizingFast = removing;
-  s.worktreeSizingTimer = setTimeout(() => {
-    s.worktreeSizingTimer = null;
-    if (worktreeCtlRemovalRunning(worktreesState.report) || visible('worktrees')) worktreeCtlLoadWorktrees(s, false);
-  }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
-}
-
 function worktreeCtlRemovalGroupRunning(s) {
   const { worktreesState, removalGroup } = s;
   const removals = (worktreesState.report && worktreesState.report.removals) || {};
-  return removalGroup.paths.some(p => !removals[p] || removals[p].state === 'running');
+  return s.removalBatches > 0 || removalGroup.paths.some(p => !removals[p] || removals[p].state === 'running');
+}
+
+// setRemoval records the state of a removal this page sent, on the page
+// and in the report on screen.
+function worktreeCtlSetRemoval(s, path, removal) {
+  s.removals.set(path, removal);
+  const rep = s.worktreesState.report;
+  if (rep) {
+    (rep.removals || (rep.removals = {}))[path] = removal;
+    worktreeCtlApplyRefusal(rep, path, removal);
+  }
+}
+
+// A refusal has a fresh verdict but only part of the inspection. Show its
+// reasons and wait for a new scan before using the row for another cleanup.
+function worktreeCtlApplyRefusal(rep, path, removal) {
+  if (!removal.row_state) return;
+  for (const repo of rep.repos || []) {
+    const row = (repo.worktrees || []).find(w => w.path === path);
+    if (!row) continue;
+    Object.assign(row, { state: removal.row_state, reasons: removal.reasons || [], reason_kinds: [],
+      can_remove_reviewed: false, verdict_needs_rescan: true });
+    return;
+  }
+}
+
+// Keep outcomes newer than the scan. A newer daemon job supersedes a
+// local result, and a job that matches a lost POST resolves its outcome.
+function worktreeCtlOverlayRemovals(s, rep) {
+  const scanned = Date.parse(rep.generated_at);
+  const { removalGroup } = s;
+  for (const [path, removal] of s.removals) {
+    const server = rep.removals?.[path];
+    const started = Date.parse(server?.started_at);
+    const newerJob = started > Date.parse(removal.finished_at);
+    const matchesLostReply = removal.state === 'unknown' && started >= Date.parse(removal.started_at);
+    if (newerJob || matchesLostReply) {
+      s.removals.delete(path);
+      if (removalGroup.paths.includes(path)) {
+        removalGroup.finished = false;
+        clearTimeout(s.removalLinger);
+      } else if (server.state === 'removed') {
+        worktreeCtlLoadLedger(s);
+      }
+      continue;
+    }
+    if (removal.state !== 'unknown' && scanned > Date.parse(removal.finished_at)) {
+      s.removals.delete(path);
+      continue;
+    }
+    (rep.removals || (rep.removals = {}))[path] = removal;
+  }
+  for (const [path, removal] of Object.entries(rep.removals || {})) {
+    if (scanned > Date.parse(removal.finished_at)) {
+      if (removal.row_state || removal.state === 'unknown') rep.removals[path] = { ...removal, superseded: true };
+      continue;
+    }
+    if (removal.state === 'removed') worktreeCtlDropRows(rep, [path]);
+    else worktreeCtlApplyRefusal(rep, path, removal);
+  }
 }
 
 function worktreeCtlTrackRemovals(s, paths, labels) {
@@ -178,12 +203,12 @@ function worktreeCtlPaintRemovalToast(s) {
   let el = document.getElementById('removal-toast');
   const running = worktreeCtlRemovalGroupRunning(s);
   const m = removalToastModel(removalGroup.paths, worktreesState.report && worktreesState.report.removals, removalGroup.labels);
-  // The group's end: the ledger has new rows; a clean finish closes the
-  // toast after a moment, a failure keeps it until closed.
+  // A clean finish closes the toast after a moment. Keep refusals and
+  // unknown outcomes visible until closed.
   if (removalGroup.paths.length && !running && !removalGroup.finished) {
     removalGroup.finished = true;
-    worktreeCtlLoadLedger(s);
-    if (!m.failed) s.removalLinger = setTimeout(() => worktreeCtlCloseRemovalToast(s), WORKTREE_REMOVAL_TOAST_LINGER_MS);
+    if (m.unknown < m.total) worktreeCtlLoadLedger(s);
+    if (!m.failed && !m.unknown) s.removalLinger = setTimeout(() => worktreeCtlCloseRemovalToast(s), WORKTREE_REMOVAL_TOAST_LINGER_MS);
   }
   if (!running) {
     clearInterval(s.removalTicker);
@@ -202,7 +227,9 @@ function worktreeCtlPaintRemovalToast(s) {
     host.appendChild(el);
     toastHost.show(host);
   }
-  el.className = 'toast toast-sticky removal-toast ' + (running ? 'info' : m.failed ? (m.removed ? 'info' : 'danger') : 'success');
+  // A running removal this page did not send is shown as of the last read.
+  m.external = m.items.some(it => it.state === 'running' && s.removals.get(it.path)?.state !== 'running');
+  el.className = 'toast toast-sticky removal-toast ' + (running || m.unknown ? 'info' : m.failed ? (m.removed ? 'info' : 'danger') : 'success');
   const html = removalToastHTML(m);
   if (el._html !== html) {
     el.innerHTML = html;
@@ -213,32 +240,49 @@ function worktreeCtlPaintRemovalToast(s) {
   if (running && !s.removalTicker) s.removalTicker = setInterval(() => worktreeCtlTickRemovalElapsed(s), 1000);
 }
 
-async function worktreeCtlLoadWorktrees(s, refresh) {
+// loadWorktrees reads the report: the daemon's saved scan, or a new scan
+// when refresh is asked (Rescan). One read at a time.
+async function worktreeCtlLoadWorktrees(s, refresh, afterMutation = false) {
   const { worktreesState, removalGroup, request, toast, markDirty, now } = s;
-  if (worktreesState.loading) return;
+  if (worktreesState.loading) {
+    if (afterMutation) s.worktreeReloadQueued = true;
+    return;
+  }
   worktreesState.loading = true;
+  const revision = s.worktreeReportRevision;
+  worktreesState.loadingRefresh = !!refresh;
   worktreesState.error = '';
   markDirty('worktrees');
-  const read = ++s.reportReads;
   try {
     const r = await request('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
     if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     const rep = await r.json();
-    if (read !== s.reportReads) return;
+    if (s.worktreeReloadQueued || revision !== s.worktreeReportRevision) return;
+    worktreeCtlOverlayRemovals(s, rep);
     worktreesState.report = rep;
     worktreeCtlReconcileWorktreeSelection(s);
     worktreesState.loadedAt = now();
-    worktreeCtlAdoptRemovals(s, worktreesState.report);
-    if (removalGroup.paths.length) worktreeCtlPaintRemovalToast(s);
-    if (!worktreesState.report.sizing && !worktreesState.report.refreshing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) s.worktreeSizingPolls = 0;
+    const hadTrackedRemovals = removalGroup.paths.length > 0;
+    removalGroup.paths = removalGroup.paths.filter(path => {
+      if (rep.removals?.[path]) return true;
+      delete removalGroup.labels[path];
+      return false;
+    });
+    worktreeCtlAdoptRemovals(s, rep);
+    if (hadTrackedRemovals || removalGroup.paths.length) worktreeCtlPaintRemovalToast(s);
   } catch (err) {
-    if (read !== s.reportReads) return;
-    worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
-    if (worktreesState.report) toast(worktreesState.error, 'danger');
+    if (!s.worktreeReloadQueued && revision === s.worktreeReportRevision) {
+      worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
+      if (worktreesState.report) toast(worktreesState.error, 'danger');
+    }
   } finally {
     worktreesState.loading = false;
+    worktreesState.loadingRefresh = false;
     markDirty('worktrees');
-    worktreeCtlFollowWorktreeSizing(s);
+    if (s.worktreeReloadQueued) {
+      s.worktreeReloadQueued = false;
+      await worktreeCtlLoadWorktrees(s, false);
+    }
   }
 }
 
@@ -295,28 +339,36 @@ async function worktreeCtlLoadClutter(s, refresh) {
   }
 }
 
-// The tab opened: load what is missing or stale, and follow sizing.
+// The tab opened: read the worktree report when none is loaded, the clutter
+// inventory and the ledger when missing or stale, and follow clutter sizing.
 function worktreeCtlActivate(s, view) {
   const { worktreesState, clutterState, now } = s;
-  if (view === 'worktrees' && (!worktreesState.report || now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
-    worktreeCtlLoadWorktrees(s, false);
-  }
+  if (view === 'worktrees' && !worktreesState.report) worktreeCtlLoadWorktrees(s, false);
   if (view === 'clutter' && (!clutterState.report || now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
     worktreeCtlLoadClutter(s, false);
   }
-  if (view === 'worktrees') worktreeCtlFollowWorktreeSizing(s);
   if (view === 'clutter') worktreeCtlFollowClutterSizing(s);
   if (view === 'worktrees' && (!worktreesState.ledger || now() - worktreesState.ledgerAt > WORKTREE_STALE_MS)) {
     worktreeCtlLoadLedger(s);
   }
 }
 
-// dropWorktreeRows removes rows the daemon just pruned or moved to the
-// Trash, so the tab updates without a rescan.
+// dropWorktreeRows removes rows the daemon just removed, pruned or moved to
+// the Trash, so the tab updates without reading the report.
 function worktreeCtlDropWorktreeRows(s, paths) {
   const { worktreesState } = s;
-  const rep = worktreesState.report;
-  if (!rep) return;
+  if (!worktreesState.report || !paths.length) return;
+  s.worktreeReportRevision++;
+  worktreeCtlDropRows(worktreesState.report, paths);
+  for (const path of paths) {
+    worktreesState.selected.delete(path);
+    worktreesState.pendingRemovalSelections.delete(path);
+  }
+  worktreeCtlReconcileWorktreeSelection(s);
+}
+
+// dropRows takes rows out of a report with their sizes and counts.
+function worktreeCtlDropRows(rep, paths) {
   const gone = new Set(paths);
   for (const repo of rep.repos || []) {
     const dropped = (repo.worktrees || []).filter(w => gone.has(w.path));
@@ -332,11 +384,6 @@ function worktreeCtlDropWorktreeRows(s, paths) {
       }
     }
   }
-  for (const path of gone) {
-    worktreesState.selected.delete(path);
-    worktreesState.pendingRemovalSelections.delete(path);
-  }
-  worktreeCtlReconcileWorktreeSelection(s);
 }
 
 function worktreeCtlSelectedWorktree(s, path) {
@@ -352,20 +399,10 @@ const worktreeCtlSameApproval = (a, b) => !!a && !!b && JSON.stringify(a) === JS
 
 function worktreeCtlReconcileWorktreeSelection(s) {
   const { worktreesState, toast } = s;
-  const restored = [];
-  for (const [path, approved] of worktreesState.pendingRemovalSelections) {
-    const current = worktreeCtlSelectedWorktree(s, path);
+  for (const [path] of worktreesState.pendingRemovalSelections) {
     const removal = ((worktreesState.report && worktreesState.report.removals) || {})[path];
-    if (!current || (removal && removal.state === 'removed')) worktreesState.pendingRemovalSelections.delete(path);
-    else if (removal && removal.state === 'failed') {
-      worktreesState.pendingRemovalSelections.delete(path);
-      if (worktreeCtlSameApproval(approved, current.approval)) {
-        worktreesState.selected.set(path, approved);
-        restored.push(path);
-      }
-    }
+    if (!worktreeCtlSelectedWorktree(s, path) || (removal && removal.state === 'removed')) worktreesState.pendingRemovalSelections.delete(path);
   }
-  if (restored.length) toast(`Removal failed; marked again for review: ${restored.join(', ')}`, 'info');
   const changed = [];
   for (const [path, approved] of worktreesState.selected) {
     const current = worktreeCtlSelectedWorktree(s, path);
@@ -422,12 +459,13 @@ async function worktreeCtlRemoveSelectedWorktrees(s) {
   });
   worktreesState.selectionBusy = true;
   render(['worktrees']);
-  const started = [];
-  const labels = {};
-  let attempted = false;
+  let removing = false;
+  let trashed = false;
   try {
     const ok = await confirm(worktreeSelectionConfirm(rows), { title: 'Review worktree removal', okLabel: `Confirm ${rows.length} removal${rows.length === 1 ? '' : 's'}`, messageHTML: worktreeSelectionReviewHTML(rows), focusCancel: true });
     if (!ok) return;
+    // One request per row in the confirmed order, each checked against the
+    // page right before it is sent.
     for (const { approval } of rows) {
       const path = approval.path;
       const current = worktreeCtlSelectedWorktree(s, path);
@@ -436,38 +474,33 @@ async function worktreeCtlRemoveSelectedWorktrees(s) {
         toast(`Skipped ${path}: its inspection facts or selection changed. Review it again before removal.`, 'info');
         continue;
       }
-      attempted = true;
+      if (worktreeDeletesPermanently(approval)) {
+        worktreesState.pendingRemovalSelections.set(path, approval);
+        worktreesState.selected.delete(path);
+        worktreeCtlTrackRemovals(s, [path], approval.branch ? { [path]: approval.branch } : {});
+        if (!removing) { removing = true; s.removalBatches++; }
+        await worktreeCtlRemoveOne(s, approval);
+        continue;
+      }
       try {
-        if (worktreeDeletesPermanently(approval)) {
-          const { r, text, json } = await worktreeCtlPostWorktree(s, '/worktrees/remove', { path, async: true,
-            ...(approval.can_remove_reviewed ? {review:{head:approval.head,reasons:approval.reasons}} : {}) });
-          if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
-          const rep = worktreesState.report;
-          if (rep) (rep.removals || (rep.removals = {}))[path] = json.removal;
-          worktreesState.pendingRemovalSelections.set(path, approval);
-          started.push(path);
-          if (approval.branch) labels[path] = approval.branch;
-          worktreesState.selected.delete(path);
-        } else {
-          const { r, text } = await worktreeCtlPostWorktree(s, '/worktrees/review-trash', { path, head: approval.head, reasons: approval.reasons });
-          if (!r.ok) throw new Error(text.trim() || String(r.status));
-          worktreeCtlDropWorktreeRows(s, [path]);
-          toast(`Moved ${path} to the Trash`, 'success');
-        }
+        const { r, text } = await worktreeCtlPostWorktree(s, '/worktrees/review-trash', { path, head: approval.head, reasons: approval.reasons });
+        if (!r.ok) throw new Error(text.trim() || String(r.status));
+        worktreeCtlDropWorktreeRows(s, [path]);
+        trashed = true;
+        toast(`Moved ${path} to the Trash`, 'success');
       } catch (err) {
-        // A failed response may follow a completed operation. Refresh once
-        // after the batch; leave retries to an explicit user action.
-        toast(`Could not remove ${path}: ${err.message || err}`, 'danger');
+        toast(`Could not remove ${path}: ${err.message || err}. Press Rescan if its facts may have changed.`, 'danger');
       }
     }
   } catch (err) {
     toast(`Could not review selected worktrees: ${err.message || err}`, 'danger');
   } finally {
-    worktreeCtlTrackRemovals(s, started, labels);
-    if (attempted) await Promise.all([worktreeCtlLoadWorktrees(s, false), worktreeCtlLoadLedger(s)]);
+    if (removing) {
+      s.removalBatches--;
+      worktreeCtlPaintRemovalToast(s);
+    } else if (trashed) worktreeCtlLoadLedger(s);
     worktreesState.selectionBusy = false;
     render(['worktrees']);
-    worktreeCtlFollowWorktreeSizing(s);
   }
 }
 
@@ -487,7 +520,9 @@ async function worktreeCtlPostWorktree(s, path, body, timeoutMs = WORKTREE_TIMEO
 async function worktreeCtlRemoveWorktree(s, path, branch) {
   const { confirm, toast } = s;
   const current = worktreeCtlSelectedWorktree(s, path);
-  const reviewed = current?.approval?.can_remove_reviewed ? current.approval : null;
+  const approval = current?.approval;
+  if (!approval || !worktreeDeletesPermanently(approval)) return;
+  const reviewed = approval.can_remove_reviewed ? approval : null;
   const rows = reviewed ? [{approval:reviewed,size:current.w}] : null;
   const ok = await confirm(
     reviewed ? worktreeSelectionConfirm(rows) : `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
@@ -497,31 +532,89 @@ async function worktreeCtlRemoveWorktree(s, path, branch) {
     toast('Inspection facts changed. Review the worktree again before deletion.', 'info');
     return;
   }
-  await worktreeCtlStartRemovals(s, [reviewed || { path, branch }]);
+  await worktreeCtlRemoveRows(s, [approval]);
 }
 
-// startRemovals: one background removal per row; the daemon checks each
-// again before it goes. The progress toast and the rows follow them.
-async function worktreeCtlStartRemovals(s, rows) {
-  const { worktreesState, render, toast } = s;
-  const rep = worktreesState.report;
-  const started = [];
+// removeRows: one removal request per row, one after another in the given
+// order; rows not sent yet show as waiting their turn. Each reply updates
+// the page as it lands, and a failure does not stop the rest.
+async function worktreeCtlRemoveRows(s, rows) {
   const labels = {};
   for (const w of rows) {
-    try {
-      const { r, text, json } = await worktreeCtlPostWorktree(s, '/worktrees/remove', { path: w.path, async: true,
-        ...(w.can_remove_reviewed ? {review:{head:w.head,reasons:w.reasons}} : {}) });
-      if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
-      if (rep) (rep.removals || (rep.removals = {}))[w.path] = json.removal;
-      started.push(w.path);
-      if (w.branch) labels[w.path] = w.branch;
-    } catch (err) {
-      toast(`Could not start removing ${w.path}: ${err.message || err}`, 'danger');
-    }
+    if (w.branch) labels[w.path] = w.branch;
+    worktreeCtlSetRemoval(s, w.path, { path: w.path, state: 'running', phase: 'waiting', step: 'waiting for its turn' });
   }
-  worktreeCtlTrackRemovals(s, started, labels);
+  worktreeCtlTrackRemovals(s, rows.map(w => w.path), labels);
+  s.removalBatches++;
+  s.render(['worktrees']);
+  try {
+    for (const w of rows) await worktreeCtlRemoveOne(s, w);
+  } finally {
+    s.removalBatches--;
+    worktreeCtlPaintRemovalToast(s);
+    s.render(['worktrees']);
+  }
+}
+
+// removeOne sends one POST /worktrees/remove and applies its reply: the
+// row leaves on success; on a refusal or failure it stays, with the fresh
+// verdict when the reply carries one, and a mark taken for it comes back.
+async function worktreeCtlRemoveOne(s, w) {
+  const { render, now } = s;
+  const path = w.path;
+  const at = new Date(now()).toISOString();
+  const current = worktreeCtlSelectedWorktree(s, path)?.w;
+  if (!w.removal_identity || current?.removal_identity !== w.removal_identity || current.state !== w.state) {
+    worktreeCtlFinishRemoval(s, path, { path, state: 'failed',
+      error: 'Worktree inspection changed. Rescan and confirm the worktree again.', finished_at: at });
+    return;
+  }
+  worktreeCtlSetRemoval(s, path, { path, state: 'running', phase: 'checking', step: 'checking it is still safe to remove', started_at: at, step_at: at });
   render(['worktrees']);
-  worktreeCtlFollowWorktreeSizing(s);
+  worktreeCtlPaintRemovalToast(s);
+  let reply = null;
+  let failure = '';
+  try {
+    reply = await worktreeCtlPostWorktree(s, '/worktrees/remove', { path, expected_identity: w.removal_identity,
+      ...(w.can_remove_reviewed ? { review: { head: w.head, reasons: w.reasons } } : {}) }, WORKTREE_REMOVE_TIMEOUT_MS);
+  } catch (err) {
+    failure = String(err.message || err);
+  }
+  const finished_at = new Date(now()).toISOString();
+  const { r, text, json } = reply || {};
+  let removal;
+  if (r && r.ok && json && json.status === 'ok') {
+    removal = { path, state: 'removed', branch: json.branch || w.branch || '', bytes: Number(json.bytes) || 0, finished_at };
+    worktreeCtlDropWorktreeRows(s, [path]);
+  } else if (r && r.status === 409 && json && json.state) {
+    removal = { path, state: 'failed', error: `not removed: it is now ${json.state}`, row_state: json.state, reasons: json.reasons || [], finished_at };
+  } else if (!reply) {
+    removal = { path, state: 'unknown', error: failure, started_at: at, finished_at };
+  } else {
+    removal = { path, state: 'failed', error: text.trim() || String(r.status), finished_at };
+  }
+  worktreeCtlFinishRemoval(s, path, removal);
+}
+
+function worktreeCtlFinishRemoval(s, path, removal) {
+  worktreeCtlSetRemoval(s, path, removal);
+  worktreeCtlRestoreMark(s, path, removal);
+  s.render(['worktrees']);
+  worktreeCtlPaintRemovalToast(s);
+}
+
+// restoreMark: a removal that failed while its approval still matches the
+// row puts the mark back for review; a removed row's mark is gone.
+function worktreeCtlRestoreMark(s, path, removal) {
+  const { worktreesState, toast } = s;
+  const approved = worktreesState.pendingRemovalSelections.get(path);
+  if (!approved) return;
+  worktreesState.pendingRemovalSelections.delete(path);
+  const current = removal.state === 'failed' && worktreeCtlSelectedWorktree(s, path);
+  if (current && worktreeCtlSameApproval(approved, current.approval)) {
+    worktreesState.selected.set(path, approved);
+    toast(`Removal failed; marked again for review: ${path}`, 'info');
+  }
 }
 
 // Remove all: every removable row of one repository after one dialog.
@@ -532,12 +625,13 @@ async function worktreeCtlRemoveAllWorktrees(s, repoPath) {
   const repo = rep && (rep.repos || []).find(r => r.path === repoPath);
   const rows = removableRows(repo, rep && rep.removals);
   if (!rows.length) return;
+  const approved = rows.map(w => ({ ...w }));
   const bytes = rows.reduce((n, w) => n + (Number(w.size_bytes) || 0), 0);
   const ok = await confirm(
     `git deletes ${rows.length} worktrees of ${repoPath}${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files. Their branches and commits stay; each is checked again before it goes.`,
     { title: 'Remove all', okLabel: `Remove ${rows.length}` });
   if (!ok) return;
-  await worktreeCtlStartRemovals(s, rows);
+  await worktreeCtlRemoveRows(s, approved);
 }
 
 // Remove every removable worktree of every repository after one dialog
@@ -547,6 +641,7 @@ async function worktreeCtlRemoveAllRemovable(s) {
   if (worktreesState.selectionBusy) return;
   const { rows, bytes } = removableEverywhere(worktreesState.report);
   if (!rows.length) return;
+  const approved = rows.map(({ w }) => ({ ...w }));
   const perRepo = new Map();
   for (const { repo } of rows) perRepo.set(repo.path, (perRepo.get(repo.path) || 0) + 1);
   const list = [...perRepo].map(([p, n]) => `${p} (${n})`).join(', ');
@@ -554,7 +649,7 @@ async function worktreeCtlRemoveAllRemovable(s) {
     `git deletes ${rows.length} worktrees${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files: ${list}. Their branches and commits stay; each is checked again before it goes.`,
     { title: 'Remove all removable worktrees', okLabel: `Remove ${rows.length}` });
   if (!ok) return;
-  await worktreeCtlStartRemovals(s, rows.map(r => r.w));
+  await worktreeCtlRemoveRows(s, approved);
 }
 
 // Folders git no longer records: open in Finder, link again to the
@@ -577,7 +672,7 @@ async function worktreeCtlReconnectWorktree(s, path, repo) {
     const { r, text } = await worktreeCtlPostWorktree(s, '/worktrees/reconnect', { path });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     toast(`Reconnected ${path} to ${repo}`, 'success');
-    worktreeCtlLoadWorktrees(s, false);
+    worktreeCtlLoadWorktrees(s, false, true);
   } catch (err) {
     toast('Could not reconnect: ' + (err.message || err), 'danger');
   }
@@ -595,10 +690,9 @@ async function worktreeCtlTrashOrphanWorktree(s, path) {
     worktreeCtlDropWorktreeRows(s, [path]);
     render(['worktrees']);
     toast(bytes ? `Moved ${path} to the Trash — ${fmtDisk(bytes)}` : `Moved ${path} to the Trash`, 'success');
-    worktreeCtlLoadWorktrees(s, false);
     worktreeCtlLoadLedger(s);
   } catch (err) {
-    toast('Could not move it to the Trash: ' + (err.message || err), 'danger');
+    toast('Could not move it to the Trash: ' + (err.message || err) + '. Press Rescan if its facts may have changed.', 'danger');
   }
 }
 
@@ -626,29 +720,9 @@ async function worktreeCtlTrashReviewedWorktree(s, path) {
     worktreeCtlDropWorktreeRows(s, [path]);
     render(['worktrees']);
     toast(`Moved to Trash${dest ? ': ' + dest : ''}`, 'success');
-    worktreeCtlLoadWorktrees(s, false);
     worktreeCtlLoadLedger(s);
   } catch (err) {
-    toast('Could not move reviewed worktree: ' + (err.message || err), 'danger');
-    worktreeCtlLoadWorktrees(s, true);
-  }
-}
-
-async function worktreeCtlPollWorktreeNotes(s, polls, answered) {
-  const { worktreesState, request, markDirty } = s;
-  for (let i = 0; i < polls; i++) {
-    await new Promise(res => setTimeout(res, WORKTREE_NOTE_EVERY_MS));
-    const read = ++s.reportReads;
-    const g = await request('/worktrees', { timeoutMs: WORKTREE_TIMEOUT_MS });
-    if (!g.ok) break;
-    const rep = await g.json();
-    if (read === s.reportReads) {
-      worktreesState.report = rep;
-      worktreeCtlReconcileWorktreeSelection(s);
-      worktreeCtlAdoptRemovals(s, rep);
-      markDirty('worktrees');
-    }
-    if (answered((worktreesState.report && worktreesState.report.advice) || {})) break;
+    toast('Could not move reviewed worktree: ' + (err.message || err) + '. Press Rescan if its facts may have changed.', 'danger');
   }
 }
 
@@ -661,19 +735,17 @@ async function worktreeCtlAdviseWorktree(s, path) {
       toast('The advisor is off or busy — no note queued', 'info');
       return;
     }
-    toast('Asked the local advisor — the note appears under the row when it answers', 'info');
-    await worktreeCtlPollWorktreeNotes(s, WORKTREE_NOTE_POLLS, advice => advice[path]);
+    toast('Asked the local advisor — once it answers, Reload shows the note under the row', 'info');
   } catch (err) {
     toast('Failed to ask the advisor: ' + (err.message || err), 'danger');
   }
 }
 
 // Ask the advisor about a whole repository: the daemon answers 202 with the
-// number of rows it will work through, and the notes arrive row by row.
+// number of rows it will work through, and the notes are taken row by row.
 async function worktreeCtlAdviseWorktreeGroup(s, repo) {
-  const { toast, now } = s;
+  const { toast } = s;
   try {
-    const askedAt = now() - 1000; // stored note times may be whole seconds
     const { r, text, json } = await worktreeCtlPostWorktree(s, '/worktrees/advise', { repo });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     if (!json || !json.queued) {
@@ -681,11 +753,6 @@ async function worktreeCtlAdviseWorktreeGroup(s, repo) {
       return;
     }
     toast(worktreeGroupAskText(json), 'info');
-    // The daemon hands the advisor one row at a time; poll the rows it
-    // named until each has a note taken after this ask.
-    const paths = json.paths || [];
-    await worktreeCtlPollWorktreeNotes(s, WORKTREE_GROUP_NOTE_POLLS, advice => paths.length > 0
-      && paths.every(p => advice[p] && Date.parse(advice[p].created_at) >= askedAt));
   } catch (err) {
     toast('Failed to ask the advisor: ' + (err.message || err), 'danger');
   }
@@ -788,7 +855,7 @@ async function worktreeCtlCleanClutter(s, name) {
 }
 
 // Resume the agent that worked in the worktree with the cleanup request;
-// its answer arrives in the report's asks (the tab re-reads meanwhile).
+// its answer lands in the report's asks, which Reload reads.
 async function worktreeCtlAskWorktreeAgent(s, path) {
   const { worktreesState, confirm, render, toast } = s;
   const ok = await confirm(
@@ -803,9 +870,7 @@ async function worktreeCtlAskWorktreeAgent(s, path) {
     if (rep && ask) (rep.asks || (rep.asks = {}))[path] = ask;
     worktreeCtlReconcileWorktreeSelection(s);
     render(['worktrees']);
-    toast(`Asked ${ask ? ask.harness : 'the agent'} — its answer shows under the row`, 'info');
-    s.worktreeSizingPolls = 0;
-    worktreeCtlFollowWorktreeSizing(s);
+    toast(`Asked ${ask ? ask.harness : 'the agent'} — once it answers, Reload shows it under the row`, 'info');
   } catch (err) {
     toast('Could not ask the agent: ' + (err.message || err), 'danger');
   }
@@ -834,6 +899,7 @@ async function worktreeCtlHideWorktreeRepo(s, repo) {
   try {
     const { r, text } = await worktreeCtlPostWorktree(s, '/worktrees/repos', { path: repo, hidden: true });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
+    s.worktreeReportRevision++;
     const rep = worktreesState.report;
     if (rep) rep.repos = (rep.repos || []).filter(x => x.path !== repo);
     worktreeCtlReconcileWorktreeSelection(s);
@@ -851,7 +917,7 @@ async function worktreeCtlAddRepo(s, path) {
     const { r, text, json } = await worktreeCtlPostWorktree(s, '/worktrees/repos', { path });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
     toast(`Added ${(json && json.path) || path}`, 'success');
-    worktreeCtlLoadWorktrees(s, false);
+    worktreeCtlLoadWorktrees(s, false, true);
     return true;
   } catch (err) {
     toast('Failed to add the repository: ' + (err.message || err), 'danger');

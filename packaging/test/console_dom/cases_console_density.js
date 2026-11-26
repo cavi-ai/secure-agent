@@ -15,14 +15,18 @@
       const headerSpacing = () => {
         window.scrollTo({top:0,behavior:'instant'});
         const button = toggle.getBoundingClientRect();
-        const header = document.querySelector('.masthead').getBoundingClientRect();
-        const title = document.getElementById('page-title').getBoundingClientRect();
+        const titleElement = document.getElementById('page-title');
+        const title = titleElement.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(titleElement);
+        const firstLine = range.getClientRects()[0];
+        const center = box => box.top + box.height / 2;
         const app = document.querySelector('.app');
         const inset = parseFloat(getComputedStyle(app).paddingLeft);
         const slot = document.querySelector('.sidebar-control-slot').getBoundingClientRect();
         const controls = document.querySelector('.sidebar-controls').getBoundingClientRect();
         return Math.abs(button.left - app.getBoundingClientRect().left - inset) < 1
-          && Math.abs(button.top - header.top) < 1 && title.left >= button.right + 11
+          && !!firstLine && Math.abs(center(button) - center(firstLine)) <= 1 && title.left >= button.right + 11
           && slot.height >= controls.height && button.width >= (innerWidth < 1100 ? 44 : 36);
       };
       state.sessionHiddenOnHome = !document.getElementById('btn-session-sidebar-toggle').getClientRects().length;

@@ -208,6 +208,12 @@ func (m *memStore) PutScanCache(name string, body []byte, at time.Time) {
 	m.puts[name]++
 }
 
+func (m *memStore) DeleteScanCache(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.scan, name)
+}
+
 func (m *memStore) PutCleanup(e model.CleanupEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -486,8 +492,8 @@ func TestAddAndHideRepo(t *testing.T) {
 	if !h.HideRepo(f.main) {
 		t.Fatal("HideRepo reported unknown repo")
 	}
-	if rep := h.Report(context.Background(), false); rep.Summary.Repos != 0 || rep.Cached {
-		t.Fatalf("hidden repo still reported (or stale cache): %+v cached=%v", rep.Summary, rep.Cached)
+	if rep := h.Report(context.Background(), false); rep.Summary.Repos != 0 || len(rep.Repos) != 0 {
+		t.Fatalf("hidden repo still reported: %+v", rep.Summary)
 	}
 }
 
@@ -509,15 +515,97 @@ func TestReportCaches(t *testing.T) {
 	if r := h.Report(context.Background(), true); r.Cached {
 		t.Fatal("refresh after minRescan served the cache")
 	}
-	now = now.Add(cacheTTL + time.Second)
-	stale := h.Report(context.Background(), false)
-	if !stale.Cached || !stale.Refreshing {
-		t.Fatalf("an expired scan must answer while a rescan runs: cached=%v refreshing=%v", stale.Cached, stale.Refreshing)
+	scanned := h.Report(context.Background(), false)
+	now = now.Add(365 * 24 * time.Hour)
+	for _, label := range []string{"a year later", "after Wait"} {
+		r := h.Report(context.Background(), false)
+		if !r.Cached || r.Refreshing || !r.GeneratedAt.Equal(scanned.GeneratedAt) {
+			t.Fatalf("%s: an old scan must answer unchanged: cached=%v refreshing=%v at %v (scan %v)", label, r.Cached, r.Refreshing, r.GeneratedAt, scanned.GeneratedAt)
+		}
+		h.Wait()
 	}
-	h.bgWG.Wait()
-	if r := h.Report(context.Background(), false); r.Refreshing || !r.GeneratedAt.After(stale.GeneratedAt) {
-		t.Fatalf("the background rescan did not replace the scan: refreshing=%v at %v (was %v)", r.Refreshing, r.GeneratedAt, stale.GeneratedAt)
+}
+
+func rowPaths(rep ScanReport) map[string]bool {
+	paths := map[string]bool{}
+	for _, r := range rep.Repos {
+		for _, w := range r.Worktrees {
+			paths[w.Path] = true
+		}
 	}
+	return paths
+}
+
+// A removal takes its row out of the cached scan and keeps the scan's time:
+// the next report answers from that scan without the row.
+func TestRemoveKeepsTheCachedScanTime(t *testing.T) {
+	h, f := removalFixture(t)
+	done, kept := f.worktree(t, "done"), f.worktree(t, "kept")
+	ctx := context.Background()
+	before := h.Report(ctx, false)
+	findRow(t, before, done)
+	if _, err := h.Remove(ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"after the removal", "after Wait"} {
+		rep := h.Report(ctx, false)
+		rows := rowPaths(rep)
+		if rows[done] || !rows[kept] || !rep.Cached || !rep.GeneratedAt.Equal(before.GeneratedAt) || rep.Summary.Worktrees != before.Summary.Worktrees-1 {
+			t.Fatalf("%s: removed row listed %v, kept row listed %v, cached=%v at %v (scan %v), worktrees %d (was %d)",
+				label, rows[done], rows[kept], rep.Cached, rep.GeneratedAt, before.GeneratedAt, rep.Summary.Worktrees, before.Summary.Worktrees)
+		}
+		h.Wait()
+	}
+}
+
+// Prune and hiding a repository take their rows out of the cached scan and
+// keep its time.
+func TestPruneAndHideKeepTheCachedScanTime(t *testing.T) {
+	home := isolateGit(t)
+	f, other := newFixture(t), newFixture(t)
+	gone, kept := f.worktree(t, "gone"), f.worktree(t, "kept")
+	other.worktree(t, "x")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}, {Workspace: other.main}}
+	h := New(st, home, Options{})
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	before := h.Report(ctx, false)
+	if row := findRow(t, before, gone); row.State != StatePrune || before.Summary.Repos != 2 {
+		t.Fatalf("gone row %s, repos %d; want prune and 2 repos", row.State, before.Summary.Repos)
+	}
+	if _, err := h.Prune(ctx, f.main); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"after prune", "after Wait"} {
+		rep := h.Report(ctx, false)
+		rows := rowPaths(rep)
+		if rows[gone] || !rows[kept] || !rep.Cached || !rep.GeneratedAt.Equal(before.GeneratedAt) || rep.Summary.Prune != 0 {
+			t.Fatalf("%s: pruned row listed %v, kept row listed %v, cached=%v at %v (scan %v), prune %d",
+				label, rows[gone], rows[kept], rep.Cached, rep.GeneratedAt, before.GeneratedAt, rep.Summary.Prune)
+		}
+		h.Wait()
+	}
+	if !h.HideRepo(other.main) {
+		t.Fatal("HideRepo reported an unknown repo")
+	}
+	for _, label := range []string{"after hide", "after Wait"} {
+		rep := h.Report(ctx, false)
+		if _, listed := reportRepoPaths(rep)[other.main]; listed || !rowPaths(rep)[kept] || !rep.Cached || !rep.GeneratedAt.Equal(before.GeneratedAt) || rep.Summary.Repos != 1 {
+			t.Fatalf("%s: hidden repo listed %v, cached=%v at %v (scan %v), repos %d", label, listed, rep.Cached, rep.GeneratedAt, before.GeneratedAt, rep.Summary.Repos)
+		}
+		h.Wait()
+	}
+}
+
+func reportRepoPaths(rep ScanReport) map[string]RepoReport {
+	out := map[string]RepoReport{}
+	for _, r := range rep.Repos {
+		out[r.Path] = r
+	}
+	return out
 }
 
 // A worktree merged by ancestry or an empty diff and touched in the last day

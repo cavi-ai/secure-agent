@@ -94,10 +94,45 @@ func TestRemoveOnlyOnFreshRemoveVerdict(t *testing.T) {
 			}
 		}
 	}
-	if rm := rep.Removals[merged]; !rep.Refreshing || rm.State != RemovalRemoved || rm.Branch != "feat/merged" || rm.FinishedAt == nil {
-		t.Fatalf("after removal: refreshing=%v removal=%+v", rep.Refreshing, rm)
+	if rm := rep.Removals[merged]; !rep.Cached || rm.State != RemovalRemoved || rm.Branch != "feat/merged" || rm.FinishedAt == nil {
+		t.Fatalf("after removal: cached=%v removal=%+v", rep.Cached, rm)
 	}
-	h.bgWG.Wait()
+	h.Wait()
+}
+
+func TestRemoveExpectedIdentityRejectsReregisteredWorktree(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "replace")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	h := New(st, home, Options{})
+	h.now = func() time.Time { return time.Now().Add(48 * time.Hour) }
+	before := findRow(t, h.Report(t.Context(), false), wt)
+	h.Wait()
+	if before.State != StateRemove || before.RemovalIdentity == "" {
+		t.Fatalf("expected a removable worktree with identity, got %+v", before)
+	}
+
+	marker := filepath.Join(wt, "node_modules", "replacement.txt")
+	replaced := false
+	progress := &phaseRecorder{onPhase: func(phase string) {
+		if phase != PhaseDeleting {
+			return
+		}
+		run(t, f.main, "worktree", "remove", "--", wt)
+		run(t, f.main, "worktree", "add", "-q", wt, before.Branch)
+		write(t, marker, "replacement worktree")
+		replaced = true
+	}}
+	_, err := h.remove(t.Context(), wt, progress, RemovalOptions{ExpectedIdentity: before.RemovalIdentity})
+	if !replaced || !errors.Is(err, ErrReviewChanged) || !exists(marker) {
+		t.Fatalf("replacement before deletion: replaced=%v, present=%v, err=%v", replaced, exists(marker), err)
+	}
+	after, _, err := h.Inspect(t.Context(), wt)
+	if err != nil || after.State != StateRemove || after.Branch != before.Branch || after.Head != before.Head {
+		t.Fatalf("replacement should still qualify with the same branch and HEAD: %+v, %v", after, err)
+	}
 }
 
 func TestPrune(t *testing.T) {

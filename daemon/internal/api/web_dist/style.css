@@ -27,6 +27,7 @@
   --page-gutter: clamp(24px, 3.2vw, 56px);
   --page-top: 40px;
   --sidebar-control-size: 36px;
+  --title-size: clamp(30px, 3vw, 42px);
   --brand-bg: rgb(150 148 255 / 0.13);
   --ok: hsl(152 62% 50%);
   --ok-bg: hsl(152 62% 50% / 0.13);
@@ -145,7 +146,8 @@ body {
 .sidebar-summary .ss-meta { flex-wrap: wrap; }
 .sidebar-control-slot { flex: 0 0 var(--sidebar-control-size); min-height: var(--sidebar-control-size); }
 .sidebar-control-slot:has(#btn-session-sidebar-toggle:not([hidden])) { min-height: calc(2 * var(--sidebar-control-size) + 4px); }
-.sidebar-controls { position: fixed; top: var(--page-top); left: calc(var(--navigation-offset) + var(--page-gutter)); z-index: 70; display: flex; flex-direction: column; gap: 4px; }
+/* The toggle centers on the title's first line box (1.15 × --title-size). */
+.sidebar-controls { position: fixed; top: calc(var(--page-top) + (1.15 * var(--title-size) - var(--sidebar-control-size)) / 2); left: calc(var(--navigation-offset) + var(--page-gutter)); z-index: 70; display: flex; flex-direction: column; gap: 4px; }
 .sidebar-controls .btn { width: var(--sidebar-control-size); min-width: var(--sidebar-control-size); height: var(--sidebar-control-size); padding: 0; background: var(--bg-1); border-color: var(--line); }
 .sidebar-controls .btn:hover { background: var(--bg-3); }
 .sidebar-controls [hidden] { display: none; }
@@ -161,7 +163,7 @@ body.sidebar-collapsed .sidebar { display: none; }
 }
 .masthead-leading, .page-heading { display: contents; }
 .sidebar-control-slot { grid-area: controls; width: var(--sidebar-control-size); }
-.page-heading h1 { grid-area: title; min-width: 0; font-size: clamp(30px, 3vw, 42px); font-weight: 650; line-height: 1.15; letter-spacing: -0.045em; }
+.page-heading h1 { grid-area: title; min-width: 0; font-size: var(--title-size); font-weight: 650; line-height: 1.15; letter-spacing: -0.045em; }
 .page-heading p { grid-area: description; color: var(--tx-2); font-size: 15px; max-width: 65ch; }
 .masthead-right { grid-area: tools; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; min-width: 0; padding-left: 8px; }
 
@@ -2859,7 +2861,7 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
   .masthead .spark { display: none; }
   .search-wrap { flex: 1; min-width: 120px; }
   .search-wrap .input-sm { width: 100%; min-height: 44px; }
-  .page-heading h1 { font-size: 32px; }
+  :root { --title-size: 32px; }
   .page-heading p { font-size: 14px; }
   .theme-toggle button { min-height: 40px; min-width: 36px; }
   .masthead .btn { min-height: 44px; min-width: 44px; }

@@ -14,8 +14,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// A restarted daemon answers from the saved scan and sizes at once, then
-// rescans in the background once the saved scan is older than cacheTTL.
+// A restarted daemon answers from the saved scan and sizes at once, and from
+// that scan at any age until a rescan is asked.
 func TestSavedScanAndSizesAnswerAfterRestart(t *testing.T) {
 	home := isolateGit(t)
 	f := newFixture(t)
@@ -43,19 +43,127 @@ func TestSavedScanAndSizesAnswerAfterRestart(t *testing.T) {
 			rep.Cached, rep.Refreshing, rep.Sizing, row.State, row.SizeBytes)
 	}
 
-	now = now.Add(cacheTTL + time.Second)
-	if rep := restarted.Report(context.Background(), false); !rep.Refreshing {
-		t.Fatal("an expired saved scan must answer while a rescan runs")
+	now = now.Add(time.Hour)
+	if rep := restarted.Report(context.Background(), false); !rep.Cached || findRow(t, rep, done).State == StatePrune {
+		t.Fatal("an old saved scan must answer unchanged until a rescan is asked")
 	}
-	restarted.bgWG.Wait()
-	if row := findRow(t, restarted.Report(context.Background(), false), done); row.State != StatePrune {
-		t.Fatalf("the background rescan did not see the removed worktree: %s", row.State)
+	if row := findRow(t, restarted.Report(context.Background(), true), done); row.State != StatePrune {
+		t.Fatalf("the asked rescan did not see the removed worktree: %s", row.State)
 	}
 
 	other := New(st, home, Options{StaleDays: 30})
 	other.now = clock
 	if rep := other.Report(context.Background(), false); rep.Cached {
 		t.Fatal("a scan saved under other options answered")
+	}
+}
+
+func TestHideBeforeFirstReportUpdatesSavedScan(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	first := New(st, home, Options{})
+	before := first.Report(t.Context(), false)
+	first.Wait()
+	if len(before.Repos) != 1 {
+		t.Fatalf("initial report has %d repositories, want 1", len(before.Repos))
+	}
+
+	h := New(st, home, Options{})
+	if !h.HideRepo(f.main) {
+		t.Fatal("hide did not find the saved repository")
+	}
+	after := New(st, home, Options{}).Report(t.Context(), false)
+	if !after.Cached || !after.GeneratedAt.Equal(before.GeneratedAt) || len(after.Repos) != 0 {
+		t.Fatalf("saved report after hide: cached=%v, generated=%v, repos=%+v", after.Cached, after.GeneratedAt, after.Repos)
+	}
+}
+
+func TestAddRepoInvalidatesSavedScanAcrossRestart(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	st := newMemStore()
+	h := New(st, home, Options{})
+	if before := h.Report(t.Context(), false); len(before.Repos) != 0 {
+		t.Fatalf("initial report has %d repositories, want 0", len(before.Repos))
+	}
+	h = New(st, home, Options{})
+	if _, err := h.AddRepo(f.main); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, hunter := range []*Hunter{New(st, home, Options{}), h} {
+		after := hunter.Report(t.Context(), false)
+		if len(after.Repos) != 1 || after.Repos[0].Path != f.main {
+			t.Fatalf("report after add: %+v", after.Repos)
+		}
+	}
+}
+
+type pausedScanStore struct {
+	*memStore
+	snapshot chan struct{}
+	resume   chan struct{}
+}
+
+func (s *pausedScanStore) WorktreeRepos() []model.WorktreeRepo {
+	repos := s.memStore.WorktreeRepos()
+	select {
+	case <-s.snapshot:
+	default:
+		close(s.snapshot)
+		<-s.resume
+	}
+	return repos
+}
+
+func TestCacheInvalidationWhileScanPublishes(t *testing.T) {
+	for _, action := range []string{"AddRepo", "SetOptions"} {
+		t.Run(action, func(t *testing.T) {
+			home := isolateGit(t)
+			f := newFixture(t)
+			st := &pausedScanStore{memStore: newMemStore(), snapshot: make(chan struct{}), resume: make(chan struct{})}
+			h := New(st, home, Options{})
+			scanned := make(chan struct{})
+			go func() {
+				defer close(scanned)
+				h.Report(t.Context(), false)
+			}()
+			<-st.snapshot
+
+			changed := make(chan error, 1)
+			go func() {
+				if action == "AddRepo" {
+					_, err := h.AddRepo(f.main)
+					changed <- err
+					return
+				}
+				h.SetOptions(Options{StaleDays: 30})
+				changed <- nil
+			}()
+			var err error
+			select {
+			case err = <-changed:
+				close(st.resume)
+			case <-time.After(5 * time.Second):
+				close(st.resume)
+				<-changed
+				<-scanned
+				t.Fatal("cache invalidation waited for the scan")
+			}
+			<-scanned
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := h.Report(t.Context(), false)
+			if action == "AddRepo" && (len(after.Repos) != 1 || after.Repos[0].Path != f.main) {
+				t.Fatalf("report after add: %+v", after.Repos)
+			}
+			if action == "SetOptions" && after.StaleDays != 30 {
+				t.Fatalf("report stale days = %d, want 30", after.StaleDays)
+			}
+		})
 	}
 }
 
@@ -104,6 +212,37 @@ func TestSavedScanWithoutReasonKindsIsRescanned(t *testing.T) {
 }
 
 // A size older than sizeTTL keeps answering while the sizer measures again.
+func TestLegacyScanGetsRemovalIdentitiesAfterRestart(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "done")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	now := func() time.Time { return time.Now().Add(48 * time.Hour) }
+	h := New(st, home, Options{})
+	h.now = now
+	report := h.Report(t.Context(), false)
+	h.Wait()
+	for i := range report.Repos {
+		for j := range report.Repos[i].Worktrees {
+			report.Repos[i].Worktrees[j].RemovalIdentity = ""
+		}
+	}
+	body, err := json.Marshal(savedReport{Options: normalize(Options{}), Report: report})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.PutScanCache(cacheReportKey, body, now())
+
+	restarted := New(st, home, Options{})
+	restarted.now = now
+	fresh := restarted.Report(t.Context(), false)
+	restarted.Wait()
+	if row := findRow(t, fresh, wt); fresh.Cached || row.RemovalIdentity == "" {
+		t.Fatalf("legacy report was not refreshed: cached=%v, identity=%q", fresh.Cached, row.RemovalIdentity)
+	}
+}
+
 func TestOldSizeAnswersWhileRemeasured(t *testing.T) {
 	home := isolateGit(t)
 	f := newFixture(t)
@@ -180,7 +319,6 @@ func TestAskedRefreshRemeasuresRecentSizes(t *testing.T) {
 
 	h.Report(context.Background(), false)
 	h.sizeWG.Wait()
-	h.bgWG.Wait()
 	if got := findRow(t, h.Report(context.Background(), false), done).SizeBytes; got != before {
 		t.Fatalf("an unasked report re-measured a size within sizeTTL: %d, was %d", got, before)
 	}

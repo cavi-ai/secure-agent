@@ -11,6 +11,7 @@
   const reasons = ['ignored files that only live here: .tmp/ (3 files, 1 MB)', 'merged into origin/main (squash)'];
   const row = (path, state, extra = {}) => ({
     path, state, head: 'a'.repeat(40), branch: `feat/${path.split('/').pop()}`,
+    removal_identity: state === 'remove' ? `identity:${path}` : undefined,
     idle_days: 20, reasons: ['merged into origin/main (squash)'], size_bytes: 1048576, ...extra,
   });
   const report = {
@@ -37,10 +38,9 @@
       writes.push({ path, body });
       if (path === '/worktrees/review-trash' && mode === 'failure') return new Response('worktree changed since review; refresh and inspect it again', { status: 409 });
       if (path === '/worktrees/remove') {
-        const running = { path: body.path, state: 'running', phase: 'checking', step: 'checking it is still safe to remove' };
-        report.removals[body.path] = mode === 'asyncfailure'
-          ? { path: body.path, state: 'failed', error: 'synthetic removal failure' } : running;
-        return response({ removal: running }, 202);
+        if (mode === 'asyncfailure') return new Response('synthetic removal failure', { status: 500 });
+        for (const project of report.repos) project.worktrees = project.worktrees.filter(item => item.path !== body.path);
+        return response({ status: 'ok', removed: body.path, branch: `feat/${body.path.split('/').pop()}`, reasons: [], bytes: 1048576, bytes_partial: false });
       }
       for (const project of report.repos) project.worktrees = project.worktrees.filter(item => item.path !== body.path);
       return response({ result: { path: body.path, trash_path: '/synthetic/Trash/reviewed-temporary-files', bytes: 1048576 } });
@@ -117,7 +117,8 @@
         document.getElementById('confirm-ok').click();
         await wait(() => writes.length === 2 && !window.SA.worktrees.selectionBusy);
         await idle();
-        probe.routes = writes.length === 2 && writes.some(write => write.path === '/worktrees/remove' && write.body.path === selectedSafe && write.body.async === true)
+        probe.routes = writes.length === 2 && writes.some(write => write.path === '/worktrees/remove' && write.body.path === selectedSafe
+          && write.body.expected_identity === `identity:${selectedSafe}` && !('async' in write.body))
           && writes.some(write => write.path === '/worktrees/review-trash' && write.body.path === review);
         const trashed = writes.find(write => write.path === '/worktrees/review-trash');
         probe.payload = trashed?.body.head === 'a'.repeat(40) && JSON.stringify(trashed.body.reasons) === JSON.stringify(reasons);

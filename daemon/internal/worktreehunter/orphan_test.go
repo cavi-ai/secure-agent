@@ -139,6 +139,10 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if _, err := h.Reconnect(context.Background(), newMain); !errors.Is(err, ErrNotOrphan) {
 		t.Fatalf("Reconnect(main) = %v, want ErrNotOrphan", err)
 	}
+	h.Wait()
+	now := h.now
+	h = New(st, home, Options{})
+	h.now, h.goos = now, "darwin"
 	repo, err := h.Reconnect(context.Background(), wt)
 	if err != nil || repo != newMain {
 		t.Fatalf("Reconnect(wt) = %q, %v", repo, err)
@@ -146,6 +150,12 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if ref, _, ok := resolveRepo(wt); !ok || ref.Main != canonical(newMain) {
 		t.Fatalf("after reconnect %s resolves to %+v, %v", wt, ref, ok)
 	}
+	restarted := New(st, home, Options{})
+	restarted.now = now
+	if row := findRow(t, restarted.Report(t.Context(), false), wt); row.Orphan {
+		t.Fatalf("saved scan still shows the reconnected worktree as orphaned: %+v", row)
+	}
+	restarted.Wait()
 
 	if _, err := h.TrashOrphan(context.Background(), newMain); !errors.Is(err, ErrNotOrphan) {
 		t.Fatalf("TrashOrphan(main) = %v, want ErrNotOrphan", err)
@@ -174,7 +184,36 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	if h.ListedPath(wt) != wt || h.ListedPath(lost) != "" || h.ListedPath("/nowhere") != "" {
 		t.Fatal("Listed does not follow the report")
 	}
-	h.bgWG.Wait()
+	h.Wait()
+}
+
+func TestSavedOrphanCountAfterTrash(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	one, two := filepath.Join(f.root, "one"), filepath.Join(f.root, "two")
+	run(t, f.main, "worktree", "add", "-q", "-b", "feat/one", one, "main")
+	run(t, f.main, "worktree", "add", "-q", "-b", "feat/two", two, "main")
+	if err := os.RemoveAll(f.main); err != nil {
+		t.Fatal(err)
+	}
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: one}, {Workspace: two}}
+	h := New(st, home, Options{})
+	h.goos = "darwin"
+	before := h.Report(t.Context(), false)
+	h.Wait()
+	if len(before.Errors) != 1 || !strings.Contains(before.Errors[0], "2 folders still point") {
+		t.Fatalf("initial errors = %q", before.Errors)
+	}
+	if _, err := h.TrashOrphan(t.Context(), one); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(st, home, Options{})
+	after := restarted.Report(t.Context(), false)
+	restarted.Wait()
+	if !after.Cached || len(after.Errors) != 1 || !strings.Contains(after.Errors[0], "1 folder still points") {
+		t.Fatalf("saved report after trash: cached=%v, errors=%q", after.Cached, after.Errors)
+	}
 }
 
 // agentAt reads every session at or under a folder: in use when any is
@@ -226,5 +265,5 @@ func TestTrashOrphanRefusesAnAgentWorkingThere(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(lost, "notes.txt")); err != nil {
 		t.Fatalf("the refused folder moved: %v", err)
 	}
-	h.bgWG.Wait()
+	h.Wait()
 }

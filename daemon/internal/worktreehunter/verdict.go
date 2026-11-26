@@ -44,6 +44,8 @@ type Worktree struct {
 	// CanRemoveReviewed permits an explicit, pinned review to discard ignored
 	// scratch files. It never changes the automatic removal verdict.
 	CanRemoveReviewed bool `json:"can_remove_reviewed,omitempty"`
+	// RemovalIdentity binds permanent deletion to the checkout in this report.
+	RemovalIdentity string `json:"removal_identity,omitempty"`
 	// ReasonKinds holds the kind of each entry of Reasons, in order
 	// (ReasonKeep, ReasonAgent, ReasonReview, ReasonSafe, ReasonInfo).
 	ReasonKinds []string `json:"reason_kinds"`
