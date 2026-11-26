@@ -19,6 +19,8 @@ An AI agent process (or a prompt-injected tool call within one) attempting to:
   `daemon.sock`, `/guard/*` endpoints) **or the harnesses' own enforcement
   plane** (`~/.claude/settings.json`, hook scripts under `~/.claude/hooks/`,
   `~/.cursor/hooks/`, `~/.config/opencode/hooks/`) — the self-removal class.
+- Modify the state directory (`~/.local/state/secure-agent/`: the evidence
+  store, hook activity log and run record). Reads stay allowed.
 - Scan a protected directory (`Grep`/`Glob` rooted at `~/.ssh`, `~/.aws`,
   the keychain dir, or Bash `cp -r`/`tar` over them) — a scan reaches every
   protected file inside, so the governing rule's mode gates the scan itself.
@@ -38,7 +40,7 @@ Enforcement points, honestly labeled:
 
 | Surface | Coverage |
 |---|---|
-| Claude file tools (`Read`/`Write`/`Edit`/`NotebookEdit`) | Mode-enforced per rule: `monitor` / `prompt` / `deny`. Writes to harness settings/hook scripts are **always denied** (like guard-control writes). |
+| Claude file tools (`Read`/`Write`/`Edit`/`NotebookEdit`) | Mode-enforced per rule: `monitor` / `prompt` / `deny`. Writes to harness settings/hook scripts and the state directory are **always denied** (like guard-control writes). |
 | Claude `Grep`/`Glob` | Mode-enforced via the governing rule when the search root is a protected directory (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.gnupg`, `~/Library/Keychains`) or matches a file rule directly. |
 | Claude `Bash` | `deny`-mode rules enforced (including protected-directory targets); key material always denied — via `cat` **or any reader alias** (`grep`/`rg` included); `prompt` fails safe to `deny` (no interactive prompt mid-Bash). |
 | Cursor | `Bash` commands only (Cursor's payload lacks `tool_name`). |

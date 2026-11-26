@@ -20,6 +20,7 @@ import threading
 import time
 import shutil
 from unittest.mock import patch
+from urllib.parse import quote
 
 from test_hook_lifecycle import running_app
 
@@ -170,6 +171,19 @@ ALLOW = [
     "osascript -e 'tell application \"Secure Agent\" to activate'",
     "tail -n 50 /var/log/secure-agent-esd.log",
     "cat \"/Applications/Secure Agent.app/Contents/Info.plist\"",
+    # reads of the state directory stay allowed
+    "cat ~/.local/state/secure-agent/activity.jsonl",
+    "tail -n 50 ~/.local/state/secure-agent/activity.jsonl",
+    "grep -c deny ~/.local/state/secure-agent/activity.jsonl",
+    "wc -l < ~/.local/state/secure-agent/activity.jsonl",
+    "ls -la ~/.local/state/secure-agent/",
+    "sed -n '1,5p' ~/.local/state/secure-agent/activity.jsonl",
+    "awk -F: '{print $1}' ~/.local/state/secure-agent/activity.jsonl",
+    "cp ~/.local/state/secure-agent/events.db /tmp/example/events-copy.db",
+    "sqlite3 /tmp/example/events-copy.db \"select count(*) from findings\"",
+    "find ~/.local/state/secure-agent -name '*.jsonl' -exec wc -l {} +",
+    f"python3 -c \"print(len(open('{HOME}/.local/state/secure-agent/activity.jsonl').read()))\"",
+    "rm -rf ~/.local/state/secure-agent-collector/old",
 ]
 
 # Must be DENIED.
@@ -287,6 +301,25 @@ DENY = [
     ("launchctl stop com.cavi-ai.secure-agentd", "guard-control-stop"),
     ("launchctl remove com.cavi-ai.secure-agentd", "guard-control-stop"),
     ("launchctl disable gui/$(id -u)/com.cavi-ai.secure-agentd", "guard-control-stop"),
+    # the evidence store, hook activity log and run record are not agent-writable
+    ("rm ~/.local/state/secure-agent/events.db", "guard-state-mutation"),
+    ("rm -rf ~/.local/state/secure-agent", "guard-state-mutation"),
+    ("sudo rm $HOME/.local/state/secure-agent/events.db-wal", "guard-state-mutation"),
+    ("rm ~/.LOCAL/State/Secure-Agent/events.db", "guard-state-mutation"),
+    ("mv ~/.local/state/secure-agent/events.db /tmp/example/e.db", "guard-state-mutation"),
+    ("cp /tmp/example/e.db ~/.local/state/secure-agent/events.db", "guard-state-mutation"),
+    ("truncate -s 0 ~/.local/state/secure-agent/activity.jsonl", "guard-state-mutation"),
+    ("sed -i '' 's/deny/allow/' ~/.local/state/secure-agent/activity.jsonl", "guard-state-mutation"),
+    ("sqlite3 ~/.local/state/secure-agent/events.db \"DELETE FROM findings\"", "guard-state-mutation"),
+    (f"sqlite3 'file:{HOME}/.local/state/secure-agent/events.db' 'select 1'", "guard-state-mutation"),
+    (f"sqlite3 :memory: \"attach '{HOME}/.local/state/secure-agent/events.db' as e\"", "guard-state-mutation"),
+    ("find ~/.local/state/secure-agent -name '*.jsonl' -delete", "guard-state-mutation"),
+    ("find ~/.local/state/secure-agent -type f -exec rm {} +", "guard-state-mutation"),
+    ("ls ~/.local/state/secure-agent/events.db | xargs rm", "guard-state-mutation"),
+    (f"python3 -c \"open('{HOME}/.local/state/secure-agent/events.db.run-record.json','w').write('{{}}')\"",
+     "guard-state-mutation"),
+    (": > ~/.local/state/secure-agent/activity.jsonl", "guard-state-redirect"),
+    ("echo '{}' >> ~/.local/state/secure-agent/events.db.run-record.json", "guard-state-redirect"),
 ]
 
 WRITE_DENY = [
@@ -302,6 +335,9 @@ WRITE_DENY = [
     (os.path.join(HOME, ".cursor/hooks/guard.py"), "harness-config-write-tool"),
     (os.path.join(HOME, ".cursor/hooks.json"), "harness-config-write-tool"),
     (os.path.join(HOME, ".config/opencode/hooks/guard.py"), "harness-config-write-tool"),
+    # the state directory
+    (os.path.join(HOME, ".local/state/secure-agent/events.db.run-record.json"), "guard-state-write-tool"),
+    (os.path.join(HOME, ".local/state/secure-agent/activity.jsonl"), "guard-state-write-tool"),
 ]
 
 
@@ -324,10 +360,48 @@ def test_read_unknown_allows():
     assert out.get("permission") == "allow", out
 
 
+def test_read_state_dir_allows():
+    out = run(read(os.path.join(HOME, ".local/state/secure-agent/activity.jsonl")))
+    assert out.get("permission") == "allow", out
+
+
+def test_state_path_resolves_relative_to_request_cwd():
+    with patch.object(secret_guard, "_PAYLOAD", {"cwd": os.path.join(HOME, "workspace")}):
+        assert secret_guard.is_guard_state_path("../.local/state/secure-agent/events.db")
+        assert not secret_guard.is_guard_state_path(".local/state/secure-agent/events.db")
+
+
+def test_guard_state_dd_checks_the_output_operand():
+    state_file = os.path.join(HOME, ".local/state/secure-agent/events.db")
+    argv = ["dd", f"of={state_file}"]
+    verdict = secret_guard.rule_guard_state_mutation(
+        secret_guard.SegmentContext(argv, "", (), "dd", "", 0, []),
+    )
+    assert verdict is not None and verdict.rule == "guard-state-mutation", verdict
+    argv = ["dd", f"if={state_file}", f"of={os.path.join(HOME, 'copy.db')}"]
+    assert secret_guard.rule_guard_state_mutation(
+        secret_guard.SegmentContext(argv, "", (), "dd", "", 0, []),
+    ) is None
+
+
+def test_sqlite_allows_copies_outside_guard_state():
+    separate_tree = os.path.join(HOME, "backup/.local/state/secure-agent/events.db")
+    sibling = os.path.join(HOME, ".local/state/secure-agent.backup/events.db")
+    for cmd in (f'sqlite3 "{separate_tree}" "select 1"',
+                f'sqlite3 "file:{quote(sibling)}?mode=ro" "select 1"',
+                f'''sqlite3 :memory: "attach '{sibling}' as backup"'''):
+        out = run(bash(cmd))
+        assert out.get("permission") == "allow", (cmd, out)
+
+
 EXTRA_TESTS = [
     test_read_monitor_default_allows,
     test_read_deny_override_blocks,
     test_read_unknown_allows,
+    test_read_state_dir_allows,
+    test_state_path_resolves_relative_to_request_cwd,
+    test_guard_state_dd_checks_the_output_operand,
+    test_sqlite_allows_copies_outside_guard_state,
 ]
 
 

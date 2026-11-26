@@ -27,6 +27,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: the daemon scans only on a rescan request or when no scan is saved; the console reads the report when the view opens and on Reload or Rescan instead of on a timer, and a removal answers in its own request.
 - Console: the sidebar toggle is centered on the page title.
 - Control API and console: the detached-process fallback uses observations of currently enabled coding agents. A process with unresolved ancestry can lose owner access when it started at or after an observed coding agent's family began.
+- Hooks: commands and file-tool writes that change files under ~/.local/state/secure-agent/ (the evidence store, hook activity log and run record) are denied; reads stay allowed, and sqlite3 on the store is denied in favor of querying a copy.
 
 ## [1.7.0] - 2026-11-21
 
