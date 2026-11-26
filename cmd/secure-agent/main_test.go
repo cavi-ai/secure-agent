@@ -27,11 +27,11 @@ func TestServicePlistHasNoKeepAlive(t *testing.T) {
 		t.Fatal("service plist must not KeepAlive-respawn the daemon")
 	}
 	for _, want := range []string{
+		"<key>Label</key><string>com.cavi-ai.secure-agent.headless</string>",
 		"<key>RunAtLoad</key><true/>",
 		"<string>/Apps/secure-agentd</string>",
 		"<key>HOME</key><string>/Users/x</string>",
 		"/Users/x/Library/Logs/secure-agent/secure-agentd.err.log",
-		serviceLabel,
 	} {
 		if !strings.Contains(plist, want) {
 			t.Fatalf("plist missing %q:\n%s", want, plist)
