@@ -8,29 +8,47 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
+// worktreeHandlers serves the worktree routes and the group advisor ask, and
+// holds only what those handlers use.
+type worktreeHandlers struct {
+	worktreeAdvisor func(model.WorktreeAdviceRequest) bool
+	asker           *agentask.Asker
+	groupAdviseMu   sync.Mutex
+	groupAdvise     map[string]bool // repositories with a group advisor ask running
+	// life is the serving context: work a handler starts in the background
+	// (a group advisor ask) ends with the daemon, not with the request.
+	life context.Context
+
+	worktrees *worktreehunter.Hunter
+	store     *store.Store
+	openPath  func(args ...string) error
+}
+
 // handleWorktrees serves the worktree hunter's report. ?refresh=1 asks for a
 // rescan (the hunter still answers from a scan finished moments ago).
-func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.worktrees == nil {
+	if h.worktrees == nil {
 		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "1"
-	rep := a.worktrees.Report(r.Context(), refresh)
-	if a.store != nil {
-		rep = enrichWorktreeReport(a.store, rep, a.asker != nil, time.Now())
+	rep := h.worktrees.Report(r.Context(), refresh)
+	if h.store != nil {
+		rep = enrichWorktreeReport(h.store, rep, h.asker != nil, time.Now())
 	}
 	writeJSON(w, rep)
 }
@@ -39,12 +57,12 @@ func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 // keep or review worktree ({"path"}) and asks it to open a pull request for
 // work worth keeping or to say the worktree can go. The answer arrives
 // later in GET /worktrees/asks and the report's asks.
-func (a *API) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.worktrees == nil || a.asker == nil {
+	if h.worktrees == nil || h.asker == nil {
 		http.Error(w, "asking agents is not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -56,7 +74,7 @@ func (a *API) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"path"} (absolute)`, http.StatusBadRequest)
 		return
 	}
-	row, repo, err := a.worktrees.Inspect(r.Context(), req.Path)
+	row, repo, err := h.worktrees.Inspect(r.Context(), req.Path)
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotWorktree):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -71,7 +89,7 @@ func (a *API) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no agent is currently working in this worktree", http.StatusConflict)
 		return
 	}
-	ask, err := a.asker.Ask(agentask.Request{Path: row.Path, Repo: repo, Branch: row.Branch, State: row.State, Reasons: row.Reasons})
+	ask, err := h.asker.Ask(agentask.Request{Path: row.Path, Repo: repo, Branch: row.Branch, State: row.State, Reasons: row.Reasons})
 	switch {
 	case errors.Is(err, agentask.ErrNoSession):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -85,16 +103,16 @@ func (a *API) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWorktreeAsks lists agent asks, newest first.
-func (a *API) handleWorktreeAsks(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktreeAsks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.store == nil {
+	if h.store == nil {
 		http.Error(w, "store not wired", http.StatusServiceUnavailable)
 		return
 	}
-	asks, err := a.store.AgentAsks(queryInt(r.URL.Query().Get("limit"), 50))
+	asks, err := h.store.AgentAsks(queryInt(r.URL.Query().Get("limit"), 50))
 	if err != nil {
 		http.Error(w, "agent asks unavailable", http.StatusServiceUnavailable)
 		return
@@ -105,17 +123,17 @@ func (a *API) handleWorktreeAsks(w http.ResponseWriter, r *http.Request) {
 // handleCleanupLedger serves the cleanup ledger: what was removed and the
 // bytes it gave back, newest first, with all-time and 30-day totals.
 // ?days=N adds the daily series of the N days ending today.
-func (a *API) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.store == nil {
+	if h.store == nil {
 		http.Error(w, "store not wired", http.StatusServiceUnavailable)
 		return
 	}
 	q := r.URL.Query()
-	ledger, err := readCleanupLedger(a.store, time.Now(), queryInt(q.Get("limit"), 100), queryInt(q.Get("days"), 0))
+	ledger, err := readCleanupLedger(h.store, time.Now(), queryInt(q.Get("limit"), 100), queryInt(q.Get("days"), 0))
 	if err != nil {
 		http.Error(w, "cleanup history unavailable", http.StatusServiceUnavailable)
 		return
@@ -186,23 +204,23 @@ func groupAdvisePaths(repo worktreehunter.RepoReport) (paths []string, skipped i
 
 // startGroupAdvise marks a repository's group ask as running; false when any
 // group ask already is (one at a time keeps the advisor's queue short).
-func (a *API) startGroupAdvise(repo string) bool {
-	a.groupAdviseMu.Lock()
-	defer a.groupAdviseMu.Unlock()
-	if len(a.groupAdvise) > 0 {
+func (h *worktreeHandlers) startGroupAdvise(repo string) bool {
+	h.groupAdviseMu.Lock()
+	defer h.groupAdviseMu.Unlock()
+	if len(h.groupAdvise) > 0 {
 		return false
 	}
-	if a.groupAdvise == nil {
-		a.groupAdvise = map[string]bool{}
+	if h.groupAdvise == nil {
+		h.groupAdvise = map[string]bool{}
 	}
-	a.groupAdvise[repo] = true
+	h.groupAdvise[repo] = true
 	return true
 }
 
-func (a *API) finishGroupAdvise(repo string) {
-	a.groupAdviseMu.Lock()
-	defer a.groupAdviseMu.Unlock()
-	delete(a.groupAdvise, repo)
+func (h *worktreeHandlers) finishGroupAdvise(repo string) {
+	h.groupAdviseMu.Lock()
+	defer h.groupAdviseMu.Unlock()
+	delete(h.groupAdvise, repo)
 }
 
 // adviseRepo asks the advisor about every keep, review and remove row of a
@@ -210,8 +228,8 @@ func (a *API) finishGroupAdvise(repo string) {
 // answer, so an advisor that is off or busy says so (200, queued 0) as a
 // single ask does; the rest follow in the background, each once the previous
 // note is stored (adviseRest). 202 lists the paths it covers.
-func (a *API) adviseRepo(w http.ResponseWriter, r *http.Request, repoPath string) {
-	repo, ok := reportRepo(a.worktrees.Report(r.Context(), false), repoPath)
+func (h *worktreeHandlers) adviseRepo(w http.ResponseWriter, r *http.Request, repoPath string) {
+	repo, ok := reportRepo(h.worktrees.Report(r.Context(), false), repoPath)
 	if !ok {
 		http.Error(w, "repository is not in the worktree report", http.StatusNotFound)
 		return
@@ -221,7 +239,7 @@ func (a *API) adviseRepo(w http.ResponseWriter, r *http.Request, repoPath string
 		http.Error(w, "the repository has no keep, review or remove worktree to ask about", http.StatusConflict)
 		return
 	}
-	if !a.startGroupAdvise(repo.Path) {
+	if !h.startGroupAdvise(repo.Path) {
 		http.Error(w, "an advisor group ask is already running", http.StatusConflict)
 		return
 	}
@@ -229,28 +247,28 @@ func (a *API) adviseRepo(w http.ResponseWriter, r *http.Request, repoPath string
 	var at time.Time
 	next := 0
 	for next < len(paths) && subject == "" {
-		s, t, queued, err := a.askWorktreeNote(r.Context(), paths[next])
+		s, t, queued, err := h.askWorktreeNote(r.Context(), paths[next])
 		next++
 		if err != nil {
 			log.Printf("api: group advice for %s: skipped %s: %v", repo.Path, paths[next-1], err)
 			continue
 		}
 		if !queued {
-			a.finishGroupAdvise(repo.Path)
+			h.finishGroupAdvise(repo.Path)
 			writeJSON(w, map[string]any{"status": "ok", "queued": 0, "rows": len(paths), "skipped": skipped})
 			return
 		}
 		subject, at = s, t
 	}
 	if subject == "" {
-		a.finishGroupAdvise(repo.Path)
+		h.finishGroupAdvise(repo.Path)
 		http.Error(w, "none of the repository's worktrees could be inspected", http.StatusConflict)
 		return
 	}
 	if skipped > 0 {
 		log.Printf("api: group advice for %s: asking about %d of %d worktrees", repo.Path, len(paths), len(paths)+skipped)
 	}
-	go a.adviseRest(repo.Path, subject, at, paths[next:])
+	go h.adviseRest(repo.Path, subject, at, paths[next:])
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "queued": 1, "rows": len(paths), "skipped": skipped, "paths": paths})
@@ -258,45 +276,45 @@ func (a *API) adviseRepo(w http.ResponseWriter, r *http.Request, repoPath string
 
 // lifetime is the serving context, or Background before the API serves
 // (tests drive handlers directly).
-func (a *API) lifetime() context.Context {
-	a.groupAdviseMu.Lock()
-	defer a.groupAdviseMu.Unlock()
-	if a.life == nil {
+func (h *worktreeHandlers) lifetime() context.Context {
+	h.groupAdviseMu.Lock()
+	defer h.groupAdviseMu.Unlock()
+	if h.life == nil {
 		return context.Background()
 	}
-	return a.life
+	return h.life
 }
 
 // askWorktreeNote inspects one worktree and hands it to the advisor: the
 // note's subject, when it was asked, and whether the advisor took it.
-func (a *API) askWorktreeNote(ctx context.Context, path string) (subject string, at time.Time, queued bool, err error) {
-	adv, err := a.worktrees.AdviceRequest(ctx, path)
+func (h *worktreeHandlers) askWorktreeNote(ctx context.Context, path string) (subject string, at time.Time, queued bool, err error) {
+	adv, err := h.worktrees.AdviceRequest(ctx, path)
 	if err != nil {
 		return "", time.Time{}, false, err
 	}
 	at = time.Now()
-	return advisor.WorktreeSubjectID(adv.Path, adv.Head), at, a.worktreeAdvisor(adv), nil
+	return advisor.WorktreeSubjectID(adv.Path, adv.Head), at, h.worktreeAdvisor(adv), nil
 }
 
 // adviseRest works through a group ask after its first note: it waits for
 // the previous note, then asks about the next row. It stops when the
 // advisor turns a row away (off or busy), at daemon shutdown or after
 // groupAdviseTimeout, and never takes the daemon down with it.
-func (a *API) adviseRest(repo, subject string, at time.Time, paths []string) {
-	defer a.finishGroupAdvise(repo)
+func (h *worktreeHandlers) adviseRest(repo, subject string, at time.Time, paths []string) {
+	defer h.finishGroupAdvise(repo)
 	defer func() {
 		if p := recover(); p != nil {
 			log.Printf("api: group advice for %s stopped: panic: %v", repo, p)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(a.lifetime(), groupAdviseTimeout)
+	ctx, cancel := context.WithTimeout(h.lifetime(), groupAdviseTimeout)
 	defer cancel()
 	for _, p := range paths {
-		if !a.waitWorktreeNote(ctx, subject, at) {
+		if !h.waitWorktreeNote(ctx, subject, at) {
 			log.Printf("api: group advice for %s stopped: %v", repo, ctx.Err())
 			return
 		}
-		s, t, queued, err := a.askWorktreeNote(ctx, p)
+		s, t, queued, err := h.askWorktreeNote(ctx, p)
 		if err != nil {
 			log.Printf("api: group advice for %s: skipped %s: %v", repo, p, err)
 			if ctx.Err() != nil {
@@ -315,12 +333,12 @@ func (a *API) adviseRest(repo, subject string, at time.Time, paths []string) {
 // waitWorktreeNote waits until the note for subject asked at at is stored,
 // or groupAdviseNoteWait passes (a failed call stores nothing; the run moves
 // on). False only when ctx ends.
-func (a *API) waitWorktreeNote(ctx context.Context, subject string, at time.Time) bool {
+func (h *worktreeHandlers) waitWorktreeNote(ctx context.Context, subject string, at time.Time) bool {
 	deadline := time.Now().Add(groupAdviseNoteWait)
 	// Stored times may be whole seconds.
 	since := at.Truncate(time.Second)
 	for time.Now().Before(deadline) {
-		v, ok, err := a.store.AdvisorVerdictResultFor(subject, "worktree")
+		v, ok, err := h.store.AdvisorVerdictResultFor(subject, "worktree")
 		if err != nil {
 			return false
 		}
@@ -340,12 +358,12 @@ func (a *API) waitWorktreeNote(ctx context.Context, subject string, at time.Time
 // and remove row of a repository ({"repo"}) for an advisory note from the
 // local model. The note is displayed beside the row; it never changes the
 // verdict or what Remove accepts.
-func (a *API) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.worktrees == nil || a.worktreeAdvisor == nil {
+	if h.worktrees == nil || h.worktreeAdvisor == nil {
 		http.Error(w, "worktree advice not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -355,10 +373,10 @@ func (a *API) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if repo != "" {
-		a.adviseRepo(w, r, repo)
+		h.adviseRepo(w, r, repo)
 		return
 	}
-	adv, err := a.worktrees.AdviceRequest(r.Context(), path)
+	adv, err := h.worktrees.AdviceRequest(r.Context(), path)
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotWorktree):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -370,17 +388,17 @@ func (a *API) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"status": "ok", "queued": a.worktreeAdvisor(adv), "subject": advisor.WorktreeSubjectID(adv.Path, adv.Head)})
+	writeJSON(w, map[string]any{"status": "ok", "queued": h.worktreeAdvisor(adv), "subject": advisor.WorktreeSubjectID(adv.Path, adv.Head)})
 }
 
 // handleWorktreeRepos edits the saved repo list: {"path"} adds the repository
 // containing path (unhiding it), {"path", "hidden": true} hides it.
-func (a *API) handleWorktreeRepos(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktreeRepos(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.worktrees == nil {
+	if h.worktrees == nil {
 		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -394,14 +412,14 @@ func (a *API) handleWorktreeRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Hidden {
-		if !a.worktrees.HideRepo(req.Path) {
+		if !h.worktrees.HideRepo(req.Path) {
 			http.Error(w, "repository is not on the saved list", http.StatusNotFound)
 			return
 		}
 		writeJSON(w, map[string]any{"status": "ok", "hidden": true})
 		return
 	}
-	main, err := a.worktrees.AddRepo(req.Path)
+	main, err := h.worktrees.AddRepo(req.Path)
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotRepo):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -419,12 +437,12 @@ func (a *API) handleWorktreeRepos(w http.ResponseWriter, r *http.Request) {
 // a refusal answers 409 with that verdict's state and reasons. With
 // "async": true it answers 202 at once and GET /worktrees reports the
 // removal's steps and outcome under "removals".
-func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.worktrees == nil {
+	if h.worktrees == nil {
 		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -462,7 +480,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		opts.ExpectedIdentity = *req.ExpectedIdentity
 	}
 	if req.Prune {
-		pruned, err := a.worktrees.Prune(r.Context(), req.Repo)
+		pruned, err := h.worktrees.Prune(r.Context(), req.Repo)
 		switch {
 		case errors.Is(err, worktreehunter.ErrNotRepo):
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -476,7 +494,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Async {
-		rm, err := a.worktrees.StartRemoveWithOptions(req.Path, opts)
+		rm, err := h.worktrees.StartRemoveWithOptions(req.Path, opts)
 		if errors.Is(err, worktreehunter.ErrRemoving) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -490,7 +508,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "removal": rm})
 		return
 	}
-	row, err := a.worktrees.RemoveWithOptions(r.Context(), req.Path, opts)
+	row, err := h.worktrees.RemoveWithOptions(r.Context(), req.Path, opts)
 	var refused *worktreehunter.NotRemovableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrRemoving):
@@ -512,12 +530,12 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 // worktreePath decodes {"path"} for the worktree folder actions.
-func (a *API) worktreePath(w http.ResponseWriter, r *http.Request) (string, bool) {
+func (h *worktreeHandlers) worktreePath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return "", false
 	}
-	if a.worktrees == nil {
+	if h.worktrees == nil {
 		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
 		return "", false
 	}
@@ -532,12 +550,12 @@ func (a *API) worktreePath(w http.ResponseWriter, r *http.Request) (string, bool
 
 // handleWorktreeReveal serves POST /worktrees/reveal: Finder selects a
 // folder the current worktree report lists.
-func (a *API) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
-	requestedPath, ok := a.worktreePath(w, r)
+func (h *worktreeHandlers) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
+	requestedPath, ok := h.worktreePath(w, r)
 	if !ok {
 		return
 	}
-	p := a.worktrees.ListedPath(requestedPath)
+	p := h.worktrees.ListedPath(requestedPath)
 	if p == "" {
 		http.Error(w, "not a folder the worktree report lists", http.StatusNotFound)
 		return
@@ -546,7 +564,7 @@ func (a *API) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the folder no longer exists", http.StatusGone)
 		return
 	}
-	if err := a.openPath("-R", p); err != nil {
+	if err := h.openPath("-R", p); err != nil {
 		if errors.Is(err, errors.ErrUnsupported) {
 			http.Error(w, "opening folders is supported on macOS only", http.StatusNotImplemented)
 			return
@@ -554,18 +572,18 @@ func (a *API) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "open failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a.store.PutAudit(store.AuditEntry{Action: "worktree-reveal", Detail: p})
+	h.store.PutAudit(store.AuditEntry{Action: "worktree-reveal", Detail: p})
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
 // handleWorktreeReconnect serves POST /worktrees/reconnect: `git worktree
 // repair` in the repository that still records an orphan folder.
-func (a *API) handleWorktreeReconnect(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.worktreePath(w, r)
+func (h *worktreeHandlers) handleWorktreeReconnect(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.worktreePath(w, r)
 	if !ok {
 		return
 	}
-	repo, err := a.worktrees.Reconnect(r.Context(), p)
+	repo, err := h.worktrees.Reconnect(r.Context(), p)
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotOrphan):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -580,12 +598,12 @@ func (a *API) handleWorktreeReconnect(w http.ResponseWriter, r *http.Request) {
 
 // handleWorktreeTrash serves POST /worktrees/trash: an orphan folder goes
 // to the Trash on its volume.
-func (a *API) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.worktreePath(w, r)
+func (h *worktreeHandlers) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.worktreePath(w, r)
 	if !ok {
 		return
 	}
-	res, err := a.worktrees.TrashOrphan(r.Context(), p)
+	res, err := h.worktrees.TrashOrphan(r.Context(), p)
 	var busy *worktreehunter.NotReviewableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotOrphan):
@@ -601,12 +619,12 @@ func (a *API) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
 
 // handleWorktreeReviewTrash is an explicit, recoverable cleanup after the
 // operator has inspected a review row. The hunter rechecks the fresh facts.
-func (a *API) handleWorktreeReviewTrash(w http.ResponseWriter, r *http.Request) {
+func (h *worktreeHandlers) handleWorktreeReviewTrash(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.worktrees == nil {
+	if h.worktrees == nil {
 		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -620,7 +638,7 @@ func (a *API) handleWorktreeReviewTrash(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "absolute path, reviewed head and reasons are required", http.StatusBadRequest)
 		return
 	}
-	res, err := a.worktrees.TrashReviewed(r.Context(), req.Path, req.Head, req.Reasons)
+	res, err := h.worktrees.TrashReviewed(r.Context(), req.Path, req.Head, req.Reasons)
 	var notReviewable *worktreehunter.NotReviewableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotWorktree):

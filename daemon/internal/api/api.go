@@ -75,15 +75,8 @@ type API struct {
 	sightings       func(since time.Time) map[string]int
 	routing         func() RoutingInfo
 	worktrees       *worktreehunter.Hunter
-	worktreeAdvisor func(model.WorktreeAdviceRequest) bool
-	groupAdviseMu   sync.Mutex
-	groupAdvise     map[string]bool // repositories with a group advisor ask running
-	// life is the serving context: work a handler starts in the background
-	// (a group advisor ask) ends with the daemon, not with the request.
-	life            context.Context
 	egressAdvisor   func(store.EgressEpisode) bool
 	clutter         *clutter.Clutter
-	asker           *agentask.Asker
 	sysAgent        *sysagent.Agent
 	autoReview      *autoReviewer
 	projectAdvisor  func(model.ProjectCleanupRequest) bool
@@ -111,6 +104,7 @@ type API struct {
 	fwBaseSources []string
 
 	guardHandlers
+	worktreeHandlers
 
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore
@@ -343,10 +337,8 @@ func New(d Deps) *API {
 		sightings:          d.Doctor.Sightings,
 		routing:            d.Doctor.Routing,
 		worktrees:          d.Workspace.Worktrees,
-		worktreeAdvisor:    d.Advisors.Worktree,
 		egressAdvisor:      d.Advisors.Egress,
 		clutter:            d.Workspace.Clutter,
-		asker:              d.Workspace.Asker,
 		sysAgent:           d.Workspace.SysAgent,
 		classifierStatus:   d.Workspace.ClassifierStatus,
 		managedModelStatus: d.Advisors.ManagedModel,
@@ -403,6 +395,11 @@ func New(d Deps) *API {
 	if a.openPath == nil {
 		a.openPath = openWithSystem
 	}
+	a.worktreeHandlers.worktreeAdvisor = d.Advisors.Worktree
+	a.worktreeHandlers.asker = d.Workspace.Asker
+	a.worktreeHandlers.worktrees = d.Workspace.Worktrees
+	a.worktreeHandlers.store = d.Store
+	a.worktreeHandlers.openPath = a.openPath
 	a.peerChk = d.Peers.Checker
 	a.guardHandlers.peerChk = d.Peers.Checker
 	if d.Peers.Checker != nil {
