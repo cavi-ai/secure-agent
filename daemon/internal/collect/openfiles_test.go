@@ -152,6 +152,18 @@ func TestRolloutJoinerTick(t *testing.T) {
 	}
 }
 
+// No live codex pid: no probe runs.
+func TestRolloutJoinerSkipsProbeWithoutPIDs(t *testing.T) {
+	j := &RolloutJoiner{
+		PIDs: func() []int32 { return nil },
+		Probe: func(context.Context, []int32) (map[int32][]string, error) {
+			t.Fatal("probe ran with no pids")
+			return nil, nil
+		},
+	}
+	j.tick(context.Background(), time.Now())
+}
+
 func TestRolloutJoinerDoesNotJoinAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
