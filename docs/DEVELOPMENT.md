@@ -121,7 +121,6 @@ bash packaging/test/test_status_item_lifecycle.sh
 
 # 4. Run console JS unit tests + DOM tests + asset lint
 node --test 'packaging/test/console/*.test.mjs'
-python3 -m unittest discover -s packaging/test/console_dom -p 'test_*.py'
 python3 packaging/test/console_dom/run_dom_tests.py
 ./packaging/test/check_console_css.sh
 

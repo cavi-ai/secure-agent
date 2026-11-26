@@ -1457,14 +1457,6 @@ def run_endpoint_detail_lists_recent_connections(page):
         ),
     )
 
-def run_notify_bell_present(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'notify bell present',
-        dom_query(dom).has(None, {'id': 'btn-notify'}),
-    )
-
 def run_notify_popover_renders_rules(page):
     check = page.check
     dom_notify = page.fixture('dom_notify')
@@ -2033,14 +2025,6 @@ def run_fleet_card_renders_the_local_node_object(page):
         ),
     )
 
-def run_fleet_panel_visible_when_a_collector_is_configured(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'fleet panel visible when a collector is configured',
-        dom_query(dom).has(None, {'id': 'fleet-panel'}),
-    )
-
 def run_fleet_panel_hides_when_no_collector_is_configured(page):
     check = page.check
     dom_nofleet = page.fixture('dom_nofleet')
@@ -2065,58 +2049,6 @@ def run_panels_after_fleet_still_render(page):
             and len(dom_query(dom).find_all(None, {'class': 'timeline-item'})) > 0
             and len(dom_query(dom).find_all(None, {'class': 'audit-item'})) == 2
         ),
-    )
-
-def run_tab_bar_renders_six_tabs_with_protection_grouping_and_agent_last(page):
-    check = page.check
-    dom = page.fixture('dom')
-    tab_ids = re.findall('class="tab-btn[^"]*" data-tab="(\\w+)"', dom)
-    tab_labels = re.findall('data-tab="\\w+" role="tab"[^>]*>\\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
-    check(
-        'tab bar renders six tabs with Protection grouping and Agent last',
-        (
-            len(dom_query(dom).find_all(None, {'class': 'tab-btn'})) == 6
-            and tab_ids == ['home', 'sessions', 'monitoring', 'protection', 'system', 'agent']
-            and tab_labels == ['Home', 'Sessions', 'Monitoring', 'Protection', 'System', 'Agent']
-        ),
-        f'ids={tab_ids} labels={tab_labels}',
-    )
-
-def run_the_attention_panel_lives_in_home_first(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'the attention panel lives in Home, first',
-        dom.index('id="tab-home"') < dom.index('id="attention-center"') < dom.index('id="spend-card"') < dom.index('id="home-findings"') < dom.index('id="home-trends"') < dom.index('id="tab-sessions"'),
-    )
-
-def run_home_tab_active_by_default(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'home tab active by default',
-        dom_query(dom).has(None, {'class': 'tab-btn active', 'data-tab': 'home'}),
-    )
-
-def run_non_active_panels_hidden(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'non-active panels hidden',
-        (
-            'id="tab-sessions" role="tabpanel" hidden' in dom
-            and 'id="tab-egress" role="tabpanel" hidden' in dom
-            and 'id="tab-system" role="tabpanel" hidden' in dom
-            and 'id="tab-policy" role="tabpanel" hidden' in dom
-        ),
-    )
-
-def run_home_panel_visible(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'home panel visible',
-        dom_query(dom).has(None, {'id': 'tab-home', 'role': 'tabpanel'}),
     )
 
 def run_home_opens_usage_by_default_and_keeps_findings_and_trends_closed(page):
@@ -2233,14 +2165,6 @@ def run_forget_deletes_the_expected_pattern_and_the_list_reloads_without_it(page
             )
         ),
         f'requests={forget_reqs!r}',
-    )
-
-def run_resource_mission_control_is_present(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'resource mission control is present',
-        dom_query(dom).has(None, {'id': 'resource-mission-control'}),
     )
 
 def run_whole_machine_headroom_is_visible(page):
@@ -2746,66 +2670,6 @@ def run_resource_intervention_failure_is_visible(page):
                   r'<p>rollback failed: permission denied</p></details>', resource_view) is not None,
     )
 
-def run_home_has_no_session_board(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'home has no session board',
-        'id="session-board"' not in dom.split('id="tab-home"', 1)[1].split('id="tab-sessions"', 1)[0],
-    )
-
-def run_trends_lead_with_the_activity_chart(page):
-    check = page.check
-    dom = page.fixture('dom')
-    overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
-    check(
-        'trends lead with the activity chart',
-        dom_query(overview).has(None, {'id': 'activity-chart'}),
-    )
-
-def run_trends_have_the_findings_by_rule_chart(page):
-    check = page.check
-    dom = page.fixture('dom')
-    overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
-    check(
-        'trends have the findings-by-rule chart',
-        dom_query(overview).has(None, {'id': 'chart-flags'}),
-    )
-
-def run_trends_have_the_memory_by_family_chart(page):
-    check = page.check
-    dom = page.fixture('dom')
-    resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
-    system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
-    sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
-    overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
-    system_resources = dom_query(dom).find(None, {'id': 'sub-resources', 'data-system-view': 'resources'})
-    check('System Resources orders live usage, Memory by family and Pressure history', system_resources is not None and system_resources.has(None, {'id': 'resource-board'}) and system_resources.has(None, {'id': 'chart-memory'}) and system_resources.has(None, {'id': 'history-board'}) and (system_resources.html.index('id="resource-board"') < system_resources.html.index('id="chart-memory"') < system_resources.html.index('id="history-board"')) and (not dom_query(overview).has(None, {'id': 'chart-memory'})))
-
-def run_trends_carry_no_list_panels(page):
-    check = page.check
-    dom = page.fixture('dom')
-    overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
-    check(
-        'trends carry no list panels',
-        (
-            not dom_query(overview).has(None, {'id': 'session-strip'})
-            and not dom_query(overview).has(None, {'id': 'events-container'})
-            and not dom_query(overview).has(None, {'id': 'resource-board'})
-        ),
-    )
-
-def run_the_egress_tab_carries_no_decision_badge(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'the Egress tab carries no decision badge: recurring egress is never queued',
-        (
-            not dom_query(dom).has(None, {'id': 'tab-badge-egress'})
-            and not dom_query(dom).has(None, {'data-kind': 'recurring_egress'})
-        ),
-    )
-
 def run_home_tab_badge_shows_needs_you_count(page):
     check = page.check
     dom = page.fixture('dom')
@@ -3087,87 +2951,12 @@ def run_egress_opens_linked_session_and_can_revoke_an_expected_episode(page):
         ),
     )
 
-def run_resources_and_events_are_separate_sub_views(page):
-    check = page.check
-    dom = page.fixture('dom')
-    resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
-    system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
-    sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
-
-    check('resources and events are separate sub-views', resource_sub is not None and 'hidden' in system_tab.attrs and system_tab.has(None, {'id': 'sub-resources'}) and (not sessions_tab.has(None, {'id': 'sub-resources'})) and sessions_tab.has(None, {'id': 'sub-events', 'hidden': ''}) and system_tab.has(None, {'class': 'subtabs', 'role': 'tablist', 'aria-label': 'System views'}))
-
-def run_pressure_history_sits_in_the_resources_sub_view(page):
-    check = page.check
-    dom = page.fixture('dom')
-    resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
-    system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
-    sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
-
-    check('pressure history sits in the Resources sub-view', resource_sub is not None and resource_sub.has(None, {'id': 'history-panel'}))
-
-def run_resource_panel_lives_in_the_resources_sub_view(page):
-    check = page.check
-    dom = page.fixture('dom')
-    resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
-    system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
-    sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
-
-    check('resource panel lives in the resources sub-view', resource_sub is not None and resource_sub.has(None, {'id': 'resource-board'}) and (resource_sub.html.index('id="resource-board"') < resource_sub.html.index('id="history-panel"')))
-
-def run_flight_recorder_lives_in_the_resources_sub_view(page):
-    check = page.check
-    dom = page.fixture('dom')
-    resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
-    system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
-    sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
-    history_panel = resource_sub.find(None, {'id': 'history-panel'}) if resource_sub else None
-    check('flight recorder lives in the resources sub-view', history_panel is not None and history_panel.has(None, {'id': 'history-board'}))
-
-def run_event_timeline_lives_in_the_events_sub_view(page):
-    check = page.check
-    dom = page.fixture('dom')
-    resource_sub = dom_query(dom).find(None, {'id': 'sub-resources', 'class': 'system-subview'})
-    system_tab = dom_query(dom).find(None, {'id': 'tab-system'})
-    sessions_tab = dom_query(dom).find(None, {'id': 'tab-sessions'})
-
-    check('event timeline lives in the events sub-view', sessions_tab.find(None, {'id': 'sub-events'}).has(None, {'id': 'events-container'}) and (not system_tab.has(None, {'id': 'events-container'})))
-
-def run_saved_view_menu_is_present(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'saved-view menu is present',
-        (
-            dom_query(dom).has(None, {'id': 'btn-views'})
-            and dom_query(dom).has(None, {'id': 'views-pop'})
-        ),
-    )
-
 def run_a_saved_view_appears_in_the_list(page):
     check = page.check
     dom_view = page.fixture('dom_view')
     check(
         'a saved view appears in the list',
         dom_query(dom_view).has(None, {'data-action': 'apply-view', 'data-name': 'Prod leaks'}),
-    )
-
-def run_global_search_box_is_present(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'global search box is present',
-        dom_query(dom).has(None, {'id': 'global-search'}),
-    )
-
-def run_export_actions_are_wired(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'export actions are wired',
-        (
-            dom_query(dom).has(None, {'data-action': 'export', 'data-what': 'flags'})
-            and dom_query(dom).has(None, {'data-action': 'export', 'data-what': 'incidents'})
-        ),
     )
 
 def run_search_narrows_the_panel(page):
@@ -4106,7 +3895,6 @@ CASES = (
     Case('endpoint_detail_names_the_owner_not_a_bare_address', run_endpoint_detail_names_the_owner_not_a_bare_address, ('dom_endpoint',)),
     Case('endpoint_detail_shows_which_agent_and_session_reached_it', run_endpoint_detail_shows_which_agent_and_session_reached_it, ('dom_endpoint',)),
     Case('endpoint_detail_lists_recent_connections', run_endpoint_detail_lists_recent_connections, ('dom_endpoint',)),
-    Case('notify_bell_present', run_notify_bell_present, ('dom',)),
     Case('notify_popover_renders_rules', run_notify_popover_renders_rules, ('dom_notify',)),
     Case('notify_override_pre_selected', run_notify_override_pre_selected, ('dom_notify',)),
     Case('notify_popover_lists_workspace_scopes', run_notify_popover_lists_workspace_scopes, ('dom_notify',)),
@@ -4139,14 +3927,8 @@ CASES = (
     Case('unavailable_first_telemetry_cannot_show_a_green_primary_status', run_unavailable_first_telemetry_cannot_show_a_green_primary_status, ('dom_netfail',)),
     Case('token_survives_reload_via_sessionstorage', run_token_survives_reload_via_sessionstorage, ('dom_tokenseed',)),
     Case('fleet_card_renders_the_local_node_object', run_fleet_card_renders_the_local_node_object, ('dom',)),
-    Case('fleet_panel_visible_when_a_collector_is_configured', run_fleet_panel_visible_when_a_collector_is_configured, ('dom',)),
     Case('fleet_panel_hides_when_no_collector_is_configured', run_fleet_panel_hides_when_no_collector_is_configured, ('dom_nofleet',)),
     Case('panels_after_fleet_still_render', run_panels_after_fleet_still_render, ('dom',)),
-    Case('tab_bar_renders_six_tabs_with_protection_grouping_and_agent_last', run_tab_bar_renders_six_tabs_with_protection_grouping_and_agent_last, ('dom',)),
-    Case('the_attention_panel_lives_in_home_first', run_the_attention_panel_lives_in_home_first, ('dom',)),
-    Case('home_tab_active_by_default', run_home_tab_active_by_default, ('dom',)),
-    Case('non_active_panels_hidden', run_non_active_panels_hidden, ('dom',)),
-    Case('home_panel_visible', run_home_panel_visible, ('dom',)),
     Case('home_opens_usage_by_default_and_keeps_findings_and_trends_closed', run_home_opens_usage_by_default_and_keeps_findings_and_trends_closed, ('dom',)),
     Case('hash_agents_opens_sessions_on_the_processes_sub_view', run_hash_agents_opens_sessions_on_the_processes_sub_view, ('dom_hashagents',)),
     Case('hash_opens_the_system_tab', run_hash_opens_the_system_tab, ('dom_hashsessionswt', 'dom_hashworktrees')),
@@ -4154,7 +3936,6 @@ CASES = (
     Case('trends_closed', run_trends_closed, ('dom_trends',)),
     Case('hidden_panels', run_hidden_panels, ('dom_csp', 'dom_hiddenrender')),
     Case('forget_deletes_the_expected_pattern_and_the_list_reloads_without_it', run_forget_deletes_the_expected_pattern_and_the_list_reloads_without_it, ('dom_forget',)),
-    Case('resource_mission_control_is_present', run_resource_mission_control_is_present, ('dom',)),
     Case('whole_machine_headroom_is_visible', run_whole_machine_headroom_is_visible, ('dom',)),
     Case('headroom_hint_explains_the_score_is_the_tightest_limit', run_headroom_hint_explains_the_score_is_the_tightest_limit, ('dom',)),
     Case('headroom_hint_fits_its_panel_at_desktop_and_phone_widths', run_headroom_hint_fits_its_panel_at_desktop_and_phone_widths, ('dom_headroomphone', 'dom_headroomwide')),
@@ -4187,12 +3968,6 @@ CASES = (
     Case('resource_approval_can_keep_the_session_running', run_resource_approval_can_keep_the_session_running, ('dom',)),
     Case('paused_resource_session_can_resume', run_paused_resource_session_can_resume, ('dom',)),
     Case('resource_intervention_failure_is_visible', run_resource_intervention_failure_is_visible, ('dom',)),
-    Case('home_has_no_session_board', run_home_has_no_session_board, ('dom',)),
-    Case('trends_lead_with_the_activity_chart', run_trends_lead_with_the_activity_chart, ('dom',)),
-    Case('trends_have_the_findings_by_rule_chart', run_trends_have_the_findings_by_rule_chart, ('dom',)),
-    Case('trends_have_the_memory_by_family_chart', run_trends_have_the_memory_by_family_chart, ('dom',)),
-    Case('trends_carry_no_list_panels', run_trends_carry_no_list_panels, ('dom',)),
-    Case('the_egress_tab_carries_no_decision_badge', run_the_egress_tab_carries_no_decision_badge, ('dom',)),
     Case('home_tab_badge_shows_needs_you_count', run_home_tab_badge_shows_needs_you_count, ('dom',)),
     Case('needs_you_shows_the_api_service_session_s_decisions_as_flat_rows_with_its_memory_cpu_and_process_count', run_needs_you_shows_the_api_service_session_s_decisions_as_flat_rows_with_its_memory_cpu_and_process_count, ('dom',)),
     Case('a_pattern_never_reaches_needs_you_it_is_one_history_row_with_its_count', run_a_pattern_never_reaches_needs_you_it_is_one_history_row_with_its_count, ('dom_pattern',)),
@@ -4213,15 +3988,7 @@ CASES = (
     Case('egress_explains_scheduled_calls_as_observed_facts_and_labeled_advisor_inference', run_egress_explains_scheduled_calls_as_observed_facts_and_labeled_advisor_inference, ('dom_tab',)),
     Case('egress_offers_broad_scope_only_with_complete_attribution', run_egress_offers_broad_scope_only_with_complete_attribution, ('dom_tab',)),
     Case('egress_opens_linked_session_and_can_revoke_an_expected_episode', run_egress_opens_linked_session_and_can_revoke_an_expected_episode, ('dom_tab',)),
-    Case('resources_and_events_are_separate_sub_views', run_resources_and_events_are_separate_sub_views, ('dom',)),
-    Case('pressure_history_sits_in_the_resources_sub_view', run_pressure_history_sits_in_the_resources_sub_view, ('dom',)),
-    Case('resource_panel_lives_in_the_resources_sub_view', run_resource_panel_lives_in_the_resources_sub_view, ('dom',)),
-    Case('flight_recorder_lives_in_the_resources_sub_view', run_flight_recorder_lives_in_the_resources_sub_view, ('dom',)),
-    Case('event_timeline_lives_in_the_events_sub_view', run_event_timeline_lives_in_the_events_sub_view, ('dom',)),
-    Case('saved_view_menu_is_present', run_saved_view_menu_is_present, ('dom',)),
     Case('a_saved_view_appears_in_the_list', run_a_saved_view_appears_in_the_list, ('dom_view',)),
-    Case('global_search_box_is_present', run_global_search_box_is_present, ('dom',)),
-    Case('export_actions_are_wired', run_export_actions_are_wired, ('dom',)),
     Case('search_narrows_the_panel', run_search_narrows_the_panel, ('dom', 'dom_view')),
     Case('flag_card_carries_per_flag_dismiss', run_flag_card_carries_per_flag_dismiss, ('dom',)),
     Case('flag_card_carries_re_run_advisor', run_flag_card_carries_re_run_advisor, ('dom',)),

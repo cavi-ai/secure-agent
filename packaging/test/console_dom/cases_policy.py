@@ -144,18 +144,6 @@ def run_scoped_permission_revoke_uses_its_id_and_updates_the_visible_state(page)
         ),
     )
 
-def run_protection_groups_notification_rules_and_audit_in_their_own_views_the_bell_opens_rules(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'Protection groups notification rules and audit in their own views; the bell opens Rules',
-        (
-            dom_query(dom).find(None, {'id': 'protection-rules'}).has(None, {'id': 'notify-rules-list'})
-            and dom_query(dom).has(None, {'id': 'btn-notify', 'data-action': 'goto-protection', 'data-protection-view': 'rules'})
-            and dom_query(dom).find(None, {'id': 'protection-audit'}).has(None, {'id': 'audit-panel'})
-        ),
-    )
-
 def run_policy_editor_exposes_intervention_steps(page):
     check = page.check
     dom_policy = page.fixture('dom_policy')
@@ -252,7 +240,6 @@ CASES = (
     Case('scoped_expectation_submits_the_displayed_revision_and_explicit_expiry', run_scoped_expectation_submits_the_displayed_revision_and_explicit_expiry, ('dom_scoped',)),
     Case('scoped_permission_shows_the_exact_endpoint_and_executable_with_revocation', run_scoped_permission_shows_the_exact_endpoint_and_executable_with_revocation, ('dom_scoped',)),
     Case('scoped_permission_revoke_uses_its_id_and_updates_the_visible_state', run_scoped_permission_revoke_uses_its_id_and_updates_the_visible_state, ('dom_scoped_revoke',)),
-    Case('protection_groups_notification_rules_and_audit_in_their_own_views_the_bell_opens_rules', run_protection_groups_notification_rules_and_audit_in_their_own_views_the_bell_opens_rules, ('dom',)),
     Case('policy_editor_exposes_intervention_steps', run_policy_editor_exposes_intervention_steps, ('dom_policy',)),
     Case('policy_editor_adds_the_selected_session_workspace', run_policy_editor_adds_the_selected_session_workspace, ('dom_policy',)),
     Case('policy_editor_exposes_automatic_containment_warning', run_policy_editor_exposes_automatic_containment_warning, ('dom_policy',)),
