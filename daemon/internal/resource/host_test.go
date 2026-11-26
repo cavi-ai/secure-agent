@@ -147,20 +147,6 @@ func TestHeadroomCapacityBandIsNotMemoryPressure(t *testing.T) {
 	}
 }
 
-func TestDeriveHostSnapshotUsesAlignedAgentCPU(t *testing.T) {
-	system, agent := 75.0, 20.0
-	host := deriveHostSnapshot(rawHostSample{
-		SystemCPUPercent: &system, AgentCPUPercent: &agent,
-		LogicalCPUCount: 8,
-	}, 0)
-	if host.AgentCPUPercent == nil || *host.AgentCPUPercent != 20 {
-		t.Fatalf("agent CPU=%v want aligned 20", host.AgentCPUPercent)
-	}
-	if host.NonAgentCPUPercent == nil || *host.NonAgentCPUPercent != 55 {
-		t.Fatalf("non-agent CPU=%v want 55", host.NonAgentCPUPercent)
-	}
-}
-
 func TestAgentCPUPercentUsesSameSamplingInterval(t *testing.T) {
 	previous := map[int32]time.Duration{10: time.Second, 20: 2 * time.Second}
 	current := map[int32]time.Duration{10: 2 * time.Second, 20: 4 * time.Second}

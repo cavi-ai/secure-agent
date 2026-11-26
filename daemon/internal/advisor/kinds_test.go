@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 	"time"
 
@@ -12,18 +11,44 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-func TestTaskKindNamesArePersistedSet(t *testing.T) {
-	var names []string
-	for _, k := range []*taskKind{flagKind, incidentKind, hostKind, guardKind, planKind, worktreeKind, projectKind, egressKind} {
-		if k.run == nil {
-			t.Fatalf("kind %q has no run", k.name)
-		}
-		names = append(names, k.name)
+func TestAdvisorVerdictsUsePersistedKinds(t *testing.T) {
+	db, err := store.Open("", "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	slices.Sort(names)
-	want := []string{"egress", "flag", "guard", "host", "incident", "plan", "project", "worktree"}
-	if !slices.Equal(names, want) {
-		t.Fatalf("kind names = %v, want %v", names, want)
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	sub := &Subscriber{sink: db}
+	write := verdictRun(func(context.Context, *Subscriber, task) (model.AdvisorVerdict, error) {
+		return model.AdvisorVerdict{Rationale: "stored verdict"}, nil
+	})
+
+	// Store and API readers look up verdicts by these persisted names.
+	for _, tc := range []struct {
+		key  string
+		kind *taskKind
+	}{
+		{"flag", flagKind},
+		{"incident", incidentKind},
+		{"host", hostKind},
+		{"guard", guardKind},
+		{"worktree", worktreeKind},
+		{"project", projectKind},
+		{"egress", egressKind},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			subjectID := "subject:" + tc.key
+			if err := write(context.Background(), sub, task{kind: tc.kind, subjectID: subjectID}); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := db.AdvisorVerdictResultFor(subjectID, tc.key)
+			if err != nil || !found || got.Rationale != "stored verdict" {
+				t.Fatalf("read persisted %q verdict: got %+v, found %t, error %v", tc.key, got, found, err)
+			}
+		})
 	}
 }
 

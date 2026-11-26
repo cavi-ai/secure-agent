@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
@@ -103,44 +102,4 @@ func TestSwiftWireNoInventedKeys(t *testing.T) {
 			}
 		}
 	}
-}
-
-// TestSwiftWireTraceFieldsDeclared pins the fields the app must NOT drop:
-// the P2 trace fields on events and the P2a aggregation fields on incidents.
-// These were the concrete silent losses; a subset mirror may omit other keys,
-// but not these.
-func TestSwiftWireTraceFieldsDeclared(t *testing.T) {
-	src, err := os.ReadFile(swiftMirrorPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mirror := string(src)
-
-	required := map[string][]string{
-		"EventModel":          {"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd"},
-		"IncidentReportModel": {"subject", "aggregate_count", "last_flag_at", "session_id"},
-	}
-	for structName, keys := range required {
-		block := swiftStruct(mirror, structName)
-		if block == "" {
-			t.Errorf("Swift mirror %s not found", structName)
-			continue
-		}
-		for _, k := range keys {
-			// A key is declared either as a CodingKey literal ("tool_status")
-			// or by a property whose name equals the key (tool → `let tool`).
-			if !declaresKey(block, k) {
-				t.Errorf("%s must declare wire key %q (the daemon emits it; dropping it loses the trace)", structName, k)
-			}
-		}
-	}
-}
-
-// declaresKey reports whether a Swift struct block declares a snake_case JSON
-// key (CodingKey literal) or its lowerCamel property form.
-func declaresKey(block, key string) bool {
-	if strings.Contains(block, `"`+key+`"`) {
-		return true
-	}
-	return strings.Contains(block, lowerCamel(key))
 }

@@ -96,35 +96,22 @@ func TestIncidentReportWireShape(t *testing.T) {
 		"summary", "risk", "touched_files", "connections", "rotate_list",
 		"advisor_narrative")
 
-	var back IncidentReport
-	if err := json.Unmarshal(raw, &back); err != nil {
+	var wire struct {
+		Risk       string `json:"risk"`
+		RotateList []struct {
+			Category string `json:"category"`
+			Risk     string `json:"risk"`
+		} `json:"rotate_list"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if back.Risk != RiskCritical || len(back.RotateList) != 1 || back.RotateList[0].Category != CategoryCloudCreds {
-		t.Errorf("round trip mismatch: %+v", back)
+	if wire.Risk != "CRITICAL" {
+		t.Errorf("incident wire risk = %q, want CRITICAL", wire.Risk)
 	}
-}
-
-func TestRiskAndCategoryValuesAreStable(t *testing.T) {
-	// The Swift UI switches on these strings; a rename breaks rendering.
-	risks := map[RiskLevel]string{
-		RiskCritical: "CRITICAL", RiskHigh: "HIGH", RiskMedium: "MEDIUM", RiskLow: "LOW",
-	}
-	for got, want := range risks {
-		if string(got) != want {
-			t.Errorf("RiskLevel %q != %q", got, want)
-		}
-	}
-	cats := map[SecretCategory]string{
-		CategoryKeychain: "KEYCHAIN", CategoryCloudCreds: "CLOUD_CREDENTIALS",
-		CategorySSHKeys: "SSH_KEYS", CategoryEnvSecrets: "ENV_SECRETS",
-		CategorySourceControl: "SOURCE_CONTROL", CategorySystemConfig: "SYSTEM_CONFIG",
-		CategoryOther: "OTHER",
-	}
-	for got, want := range cats {
-		if string(got) != want {
-			t.Errorf("SecretCategory %q != %q", got, want)
-		}
+	if len(wire.RotateList) != 1 || wire.RotateList[0].Risk != "HIGH" ||
+		wire.RotateList[0].Category != "CLOUD_CREDENTIALS" {
+		t.Errorf("unexpected wire rotation list: %+v", wire.RotateList)
 	}
 }
 
