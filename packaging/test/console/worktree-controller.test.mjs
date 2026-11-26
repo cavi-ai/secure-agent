@@ -752,6 +752,21 @@ for (const [endpoint, mutate] of [
   });
 }
 
+test('a report with pending work schedules no timer that reads /worktrees', async () => {
+  const pending = [{ sizing: true }, { refreshing: true }, { asks: { [WT]: { status: 'running', harness: 'codex' } } },
+    { removals: { [WT]: { path: WT, state: 'running', phase: 'deleting', step: 'deleting' } } }];
+  for (const extra of pending) {
+    const { controller, log, timers } = build({ respond: () => reply({ ...worktreeReport(), ...extra }), shown: { worktrees: true } });
+    await controller.loadWorktrees(false);
+    controller.activate('worktrees');
+    for (let i = 0; i < 5 && timers.length; i++) {
+      for (const t of timers.splice(0)) t.fn();
+      await settle();
+    }
+    assert.equal(log.requests.filter(r => r.url.startsWith('/worktrees')).length, 1, JSON.stringify(extra));
+  }
+});
+
 test('Remove sends one request without async; the row is removing until the reply, then gone or back with the reason', async () => {
   let finish;
   const { controller, log, document, ctx } = build({ respond: url => (url === '/worktrees' ? reply(worktreeReport()) : new Promise(resolve => { finish = resolve; })) });
