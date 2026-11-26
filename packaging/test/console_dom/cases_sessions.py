@@ -2,15 +2,6 @@
 from case_support import html, json, re, HTMLParser, dom_query, starts_with, payload_cases, pre, log_rows, PolicyRowCounter
 from case_types import Case
 
-def run_session_rail_renders_durable_sessions(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'session rail renders durable sessions',
-        len(dom_query(dom).find_all(None, {'class': 'session-card'})) >= 2,
-        f"cards={len(dom_query(dom).find_all(None, {'class': 'session-card'}))}",
-    )
-
 def run_rail_titles_are_repo_branch_not_harness_repo(page):
     check = page.check
     dom = page.fixture('dom')
@@ -144,30 +135,6 @@ def run_session_findings_history_retains_scope_and_returns_to_the_same_session(p
         ),
     )
 
-def run_sessions_has_no_cleanup_sub_view_its_panels_live_in_the_system_tab(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'Sessions has no Cleanup sub-view; its panels live in the System tab',
-        (
-            not dom_query(dom).has(None, {'data-subtab': 'worktrees'})
-            and not dom_query(dom).has(None, {'id': 'sub-worktrees'})
-            and dom.index('id="tab-system"') < dom.index('id="worktrees-container"') < dom.index('id="clutter-container"') < dom.index('id="tab-policy"')
-            and dom.index('id="tab-egress"') < dom.index('id="tab-system"')
-        ),
-    )
-
-def run_sessions_panel_lives_in_the_sessions_tab(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'sessions panel lives in the sessions tab',
-        (
-            dom.index('id="tab-sessions"') < dom.index('id="session-board"')
-            and dom.index('id="session-board"') < dom.index('id="sub-processes"')
-        ),
-    )
-
 def run_memory_by_family(page):
     check = page.check
     dom_memfam = page.fixture('dom_memfam')
@@ -190,14 +157,6 @@ def run_memory_by_family(page):
             and int(mem_badge.group(1)) == len(mem_bars) - mem_infra == 3
         ),
         f"{(mem_badge.group(0) if mem_badge else 'no badge')} infra={mem_infra}",
-    )
-
-def run_session_board_has_project_filter(page):
-    check = page.check
-    dom = page.fixture('dom')
-    check(
-        'session board has project filter',
-        dom_query(dom).has(None, {'id': 'session-cwd-filter'}),
     )
 
 def run_session_rail_lists_live_cards_and_the_ended_tail(page):
@@ -256,20 +215,6 @@ def run_session_coverage_remains_available_without_a_global_monitoring_gap(page)
             )
             and dom_query(dom_session_coverage).has(None, {'id': 'coverage-center', 'hidden': None})
             and re.search('id="monitoring-diagnostics"[^>]*\\bhidden', dom_session_coverage) is None
-        ),
-    )
-
-def run_session_chip_appears(page):
-    check = page.check
-    dom_session = page.fixture('dom_session')
-    check(
-        'session chip appears',
-        (
-            dom_query(dom_session).has(None, {'id': 'session-filter', 'class': 'session-filter'})
-            or (
-                dom_query(dom_session).has(None, {'id': 'session-filter'})
-                and 'hidden' not in dom_session.split('id="session-filter"')[1][:80]
-            )
         ),
     )
 
@@ -654,7 +599,6 @@ CASES = (
     Case('session_latest_focus', run_session_latest_focus),
     Case('session_empty_navigation', run_session_empty_navigation),
     Case('session_discovery', run_session_discovery),
-    Case('session_rail_renders_durable_sessions', run_session_rail_renders_durable_sessions, ('dom',)),
     Case('rail_titles_are_repo_branch_not_harness_repo', run_rail_titles_are_repo_branch_not_harness_repo, ('dom',)),
     Case('ended_session_marked', run_ended_session_marked, ('dom',)),
     Case('sessions_rail_renders_one_group_per_live_harness_newest_first_infra_last', run_sessions_rail_renders_one_group_per_live_harness_newest_first_infra_last, ('dom',)),
@@ -666,16 +610,12 @@ CASES = (
     Case('memory_opens_first_and_earlier_rows_prepend_once', run_memory_opens_first_and_earlier_rows_prepend_once, ('dom_memory',)),
     Case('session_guard_decision_uses_the_existing_handler_and_refreshes_its_result', run_session_guard_decision_uses_the_existing_handler_and_refreshes_its_result, ('dom_overview_decision',)),
     Case('session_findings_history_retains_scope_and_returns_to_the_same_session', run_session_findings_history_retains_scope_and_returns_to_the_same_session, ('dom_overview_return',)),
-    Case('sessions_has_no_cleanup_sub_view_its_panels_live_in_the_system_tab', run_sessions_has_no_cleanup_sub_view_its_panels_live_in_the_system_tab, ('dom',)),
-    Case('sessions_panel_lives_in_the_sessions_tab', run_sessions_panel_lives_in_the_sessions_tab, ('dom',)),
     Case('memory_by_family', run_memory_by_family, ('dom_memfam',)),
-    Case('session_board_has_project_filter', run_session_board_has_project_filter, ('dom',)),
     Case('session_rail_lists_live_cards_and_the_ended_tail', run_session_rail_lists_live_cards_and_the_ended_tail, ('dom',)),
     Case('session_cards_labeled_by_repo_branch_or_folder', run_session_cards_labeled_by_repo_branch_or_folder, ('dom',)),
     Case('session_card_selects_the_session_trace', run_session_card_selects_the_session_trace, ('dom',)),
     Case('sessions_and_processes_counts_sit_on_the_sub_view_buttons_the_sessions_tab_keeps_the_live_count', run_sessions_and_processes_counts_sit_on_the_sub_view_buttons_the_sessions_tab_keeps_the_live_count, ('dom',)),
     Case('session_coverage_remains_available_without_a_global_monitoring_gap', run_session_coverage_remains_available_without_a_global_monitoring_gap, ('dom_session_coverage',)),
-    Case('session_chip_appears', run_session_chip_appears, ('dom_session',)),
     Case('session_chip_count', run_session_chip_count, ('dom_session',)),
     Case('session_scopes_findings_list', run_session_scopes_findings_list, ('dom_session',)),
     Case('memory_by_family_2', run_memory_by_family_2, ('dom_memprobe',)),

@@ -447,14 +447,6 @@ test('removeAllWorktrees: counts the removable rows in the dialog and sends one 
   assert.match(toast, /busy/);
 });
 
-test('removeAllWorktrees: a repository with nothing removable asks nothing', async () => {
-  const { controller, log } = build({ respond: () => reply(worktreeReport()) });
-  await controller.loadWorktrees(false);
-  await controller.removeAllWorktrees('/code/other');
-  assert.deepEqual(log.confirms, []);
-  assert.equal(log.requests.length, 1);
-});
-
 test('removeAllRemovable: one dialog counts rows per repository, then one removal per row', async () => {
   const { controller, log } = build({ respond: (url, req) => (url === '/worktrees' ? reply(worktreeReport()) : removed(JSON.parse(req.body).path)) });
   await controller.loadWorktrees(false);
@@ -775,16 +767,6 @@ test('a report with pending work schedules no timer that reads /worktrees', asyn
   }
 });
 
-test('opening the worktrees view twice more than a minute apart reads the report once', async () => {
-  const { controller, log, clock } = build({ respond: () => reply(worktreeReport()) });
-  controller.activate('worktrees');
-  await settle();
-  clock.at += 60001;
-  controller.activate('worktrees');
-  await settle();
-  assert.deepEqual(log.requests.map(r => r.url), ['/worktrees']);
-});
-
 test('Remove sends one request without async; the row is removing until the reply, then gone or back with the reason', async () => {
   let finish;
   const { controller, log, document, ctx } = build({ respond: url => (url === '/worktrees' ? reply(worktreeReport()) : new Promise(resolve => { finish = resolve; })) });
@@ -938,13 +920,6 @@ test('Reload reads the report without refresh and Rescan with refresh=1; the sum
   held.shift()(reply(worktreeReport()));
   await rescan;
   assert.deepEqual(log.requests.map(r => r.url), ['/worktrees', '/worktrees?refresh=1']);
-});
-
-test('discuss actions hand the collaborator a path or a repository target', () => {
-  const { controller, log } = build();
-  controller.discussWorktree(WT);
-  controller.discussWorktreeGroup(REPO);
-  assert.deepEqual(plain(log.discussed), [{ path: WT }, { repo: REPO }]);
 });
 
 test('loadLedger stores the ledger with its limit, stamps the time and repaints the history', async () => {

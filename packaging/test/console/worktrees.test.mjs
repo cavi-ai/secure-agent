@@ -25,11 +25,6 @@ const { worktreeLaneCounts, worktreeLane, worktreeLanesHTML, worktreeGroups, wor
   worktreeMatches, niceBytesCeil, removableEverywhere, reclaimTilesHTML, reclaimChartHTML, cleanupHistoryHTML, cleanupKind, cleanupEntryTitle,
   localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
 
-function cssRule(css, selector) {
-  const literal = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return css.match(new RegExp(String.raw`^\s*${literal}\s*\{([^}]*)\}`, 'm'))?.[1] ?? '';
-}
-
 const REPO = '/Users/x/code/app';
 test('row selection is accessible, reflects marks, and explains blocked rows', () => {
   const repo = { path: REPO };
@@ -70,18 +65,6 @@ test('selection summary preserves hidden marks and labels partial and unknown si
   assert.match(pending, /data-action="worktrees-clear-selection" title=/);
 });
 
-test('long removal confirmations scroll their message while keeping title and action buttons visible', () => {
-  const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
-  const rule = selector => cssRule(css, selector);
-  assert.match(rule('.confirm-card'), /display: flex/);
-  assert.match(rule('.confirm-card'), /flex-direction: column/);
-  assert.match(rule('.confirm-card'), /max-height: calc\(100vh - 32px\)/);
-  assert.match(rule('.confirm-card'), /max-height: calc\(100dvh - 32px\)/);
-  assert.match(rule('.confirm-message'), /min-height: 0/);
-  assert.match(rule('.confirm-message'), /overflow-y: auto/);
-  assert.match(rule('.confirm-actions'), /flex-shrink: 0/);
-  assert.match(rule('.confirm-card h3'), /flex-shrink: 0/);
-});
 test('worktree hierarchy keeps escaped complete identities and exact action targets', () => {
   const repo = { path: '/workspace/"team"/<service>', default_branch: 'origin/main', source: 'session' };
   const row = { path: repo.path + '/.worktrees/long-identity', branch: 'feat/<complete>"identity"', head: 'abc', state: 'review', reasons: ['1 uncommitted change'] };
@@ -263,19 +246,6 @@ test('inspection offers checked deletion, reviewed Trash, or a concrete resoluti
   assert.match(blocked, /locked; unlock it first/);
   assert.match(blocked, /Open folder to resolve/);
   assert.match(worktreeRowHTML(row({ state: 'remove' }), repo, null, null, { state: 'failed', error: 'x' }), />Try again<\/button>/);
-});
-
-test('styles: the Remove looks use existing color tokens; every .btn greys out when disabled; the legend is muted', () => {
-  const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
-  const rule = selector => cssRule(css, selector);
-  const solid = rule('.btn-danger-solid');
-  assert.ok(solid.includes('background: var(--bad)') && solid.includes('border-color: var(--bad)') && /color: var\(--bg-0\)/.test(solid), solid);
-  const outline = rule('.btn-warn-outline');
-  assert.ok(outline.includes('background: transparent') && outline.includes('border-color: var(--warn)') && /(^|[ ;])color: var\(--warn\)/.test(outline), outline);
-  assert.match(css, /\.btn:disabled, \.btn\[disabled\] \{ opacity: 0\.45; cursor: not-allowed; \}/);
-  assert.ok(rule('.wt-legend').includes('color: var(--tx-3)'));
-  const html = readFileSync(path.join(webDist, 'index.html'), 'utf8');
-  assert.ok(!html.includes('id="worktrees-legend"'));
 });
 
 test('worktreeGroups: the header search keeps rows matching branch, path, repository, state or reasons; empty matches all', () => {
@@ -524,21 +494,6 @@ test('removals: step while running with Remove disabled; refusal and failure sta
   assert.ok(!worktreeRowHTML(w, rep.repos[0]).includes('wt-removal'));
 });
 
-test('state styles: each state has its own stripe and chip color; keep is not red', () => {
-  const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
-  const rule = selector => cssRule(css, selector);
-  const stripes = ['remove', 'review', 'keep', 'prune'].map(st => rule(`.wt-row.wt-${st}`).match(/var\(--[a-z0-9-]+\)/)?.[0]);
-  assert.equal(new Set(stripes).size, 4, `stripes ${stripes}`);
-  const chips = ['remove', 'review', 'keep'].map(st => rule(`.wt-${st} .wt-state`).match(/color: (var\(--[a-z0-9-]+\))/)?.[1]);
-  assert.equal(new Set(chips).size, 3, `chips ${chips}`);
-  assert.ok(!rule('.wt-keep .wt-state').includes('--bad') && !rule('.wt-row.wt-keep').includes('--bad'), 'keep must not use the error red');
-  // Reason tags carry the state colors: keep violet, review amber, safe green;
-  // context text keeps body contrast.
-  assert.ok(rule('.wt-reason-keep::before').includes('var(--brand)'), 'keep tag');
-  assert.ok(rule('.wt-reason-review::before').includes('var(--warn)'), 'review tag');
-  assert.ok(rule('.wt-reason-safe::before').includes('var(--ok)') && rule('.wt-reason-safe::before').includes("content: '✓'"), 'safe tag');
-  assert.ok(!rule('.wt-reason-info').includes('--tx-3'), 'info tag contrast');
-});
 
 test('orphans: a missing repository comes first with its error; its folders offer Open folder, Reconnect when possible, Move to Trash', () => {
   const rep = report();

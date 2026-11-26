@@ -173,11 +173,12 @@ def run_worktrees(page):
             )
         ),
     )
+    dw_requests = html.unescape(pre(dom_wtdiscuss, 'mock-requests'))
     dw_agent = dom_wtdiscuss.split('id="agent-dock"', 1)[-1].split('id="drawer"', 1)[0]
     check(
         'worktrees: Discuss posts the worktree to the agent and shows the question as a card in the docked panel, staying on System',
         (
-            'POST /agent/worktree' in pre(dom_wtdiscuss, 'mock-requests')
+            'POST /agent/worktree body={"path":"/Users/dev/workspace/api-service/.worktrees/evidence"}' in dw_requests.splitlines()
             and dom_query(dom_wtdiscuss).has(None, {'class': 'tab-btn active', 'data-tab': 'system'})
             and '<aside id="agent-dock" class="agent-dock" aria-labelledby="agent-dock-title">' in dom_wtdiscuss
             and 'id="agent-dock-body"><section class="agent-chat" id="agent-chat"' in dw_agent
@@ -186,6 +187,7 @@ def run_worktrees(page):
             and 'branch feat/evidence' in dw_agent
             and 'Only ignored scratch files would be lost.' in dw_agent
         ),
+        dw_requests,
     )
     cycle = json.loads(html.unescape(pre(dom_wtdockcycle, 'dock-cycle')) or '{}')
     in_dock = {'dock': True, 'drawer': False, 'chat': 'agent-dock-body', 'tab': 'system', 'focus': 'agent-input', 'end': True}
