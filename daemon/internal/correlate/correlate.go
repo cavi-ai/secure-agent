@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -166,7 +167,12 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 	}
 	c.restoreOpenReadFlags(hooks.OpenReadFlags)
 	if cfg.DBPath != "" {
-		c.stateDir = filepath.Dir(cfg.DBPath)
+		dir, err := filepath.Abs(filepath.Dir(cfg.DBPath))
+		if err != nil {
+			log.Printf("secure-agentd: cannot resolve monitor state directory: %v", err)
+		} else {
+			c.stateDir = dir
+		}
 	}
 	return c
 }

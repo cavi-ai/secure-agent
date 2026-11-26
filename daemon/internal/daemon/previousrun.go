@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -24,14 +25,6 @@ func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() 
 	}
 	run.mu.Lock()
 	defer run.mu.Unlock()
-	unconfirmed := false
-	if rec := run.ownerStop; rec != nil {
-		run.ownerStop = nil
-		if !ownerStopConfirmed(st, *rec) {
-			run.pending = append(run.pending, pendingRun{PreviousRun: PreviousRun{Record: *rec, Ending: RunEndingUnconfirmedStop}})
-			unconfirmed = true
-		}
-	}
 	if len(run.pending) == 0 {
 		return
 	}
@@ -45,12 +38,19 @@ func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() 
 		if bootErr == nil && !started.IsZero() && started.Before(boot) {
 			continue
 		}
-		if err := storePreviousRunFinding(st, pending, now); err != nil {
+		finding := pending
+		if pending.Ending == RunEndingOwnerStop {
+			if ownerStopConfirmed(st, pending.Record) {
+				continue
+			}
+			finding.Ending = RunEndingUnconfirmedStop
+		}
+		if err := storePreviousRunFinding(st, finding, now); err != nil {
 			log.Printf("secure-agentd: %s finding not stored: %v", monitorStoppedRule, err)
 			remaining = append(remaining, pending)
 		}
 	}
-	if len(remaining) == len(run.pending) && !unconfirmed {
+	if len(remaining) == len(run.pending) {
 		return
 	}
 	run.pending = remaining
@@ -61,7 +61,7 @@ func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() 
 }
 
 // ownerStopConfirmed reports whether the store agrees that rec ended by an
-// owner stop: it holds a stop intent for the run, or it holds no runs at all
+// owner stop: it holds a valid stop intent for the run, or it holds no runs at all
 // (a store written before runs were recorded).
 func ownerStopConfirmed(st *store.Store, rec RunRecord) bool {
 	intent, found, err := st.MonitorRunStopIntent(rec.PID, rec.StartedAt)
@@ -70,7 +70,7 @@ func ownerStopConfirmed(st *store.Store, rec RunRecord) bool {
 		return false
 	}
 	if found {
-		return !intent.IsZero()
+		return stopIntentValidAt(intent, rec.EndedAt)
 	}
 	has, err := st.HasMonitorRuns()
 	if err != nil {
@@ -97,17 +97,15 @@ func recordRunStart(st *store.Store, run *RunTracker) {
 // recordStopIntent records the owner's stop intent in the run record and in
 // the event store.
 func recordStopIntent(st *store.Store, run *RunTracker) (at, validUntil time.Time, err error) {
-	at, validUntil, err = run.RecordStopIntent()
-	if err != nil || st == nil {
-		return at, validUntil, err
+	if st == nil || run == nil {
+		return time.Time{}, time.Time{}, errors.New("run record or event store unavailable")
 	}
-	run.mu.Lock()
-	pid, started := run.rec.PID, run.rec.StartedAt
-	run.mu.Unlock()
-	if err := st.PutMonitorStopIntent(pid, started, at); err != nil {
-		log.Printf("secure-agentd: stop intent not stored: %v", err)
-	}
-	return at, validUntil, nil
+	return run.recordStopIntent(func(rec RunRecord) error {
+		if err := st.PutMonitorStopIntent(rec.PID, rec.StartedAt, rec.StopIntentAt); err != nil {
+			return fmt.Errorf("store stop intent: %w", err)
+		}
+		return nil
+	})
 }
 
 func storePreviousRunFinding(st *store.Store, pending pendingRun, now func() time.Time) error {
@@ -176,7 +174,7 @@ func runEndingPhrase(ending RunEnding) (sub, how string) {
 	case RunEndingNoRecord:
 		return "no ending recorded", "ended with no ending recorded"
 	case RunEndingUnconfirmedStop:
-		return "owner stop with no stored stop intent", "was recorded as an owner stop with no stored stop intent"
+		return "owner stop with no valid stored stop intent", "was recorded as an owner stop with no valid stored stop intent"
 	default:
 		return string(ending), "ended as " + string(ending)
 	}

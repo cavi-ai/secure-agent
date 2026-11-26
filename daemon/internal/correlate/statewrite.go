@@ -24,9 +24,16 @@ func hookStatePath(rel string) bool {
 // attributed to agent: a write, a delete or an open for writing of a path in
 // the state directory that the hooks do not write. Callers hold c.mu.
 func (c *Correlator) stateWriteLocked(e event.Event, agent string) []model.Flag {
+	if c.stateDir == "" {
+		return nil
+	}
 	var did string
 	switch e.Kind {
 	case event.KindFileWrite:
+		if e.RenameSource != "" && e.RenameSource != e.Path {
+			flags := c.stateWritePathLocked(e, agent, e.Path, "renamed to")
+			return append(flags, c.stateWritePathLocked(e, agent, e.RenameSource, "renamed from")...)
+		}
 		did = "wrote"
 	case event.KindFileDelete:
 		did = "deleted"
@@ -38,15 +45,16 @@ func (c *Correlator) stateWriteLocked(e event.Event, agent string) []model.Flag 
 	default:
 		return nil
 	}
-	if c.stateDir == "" {
+	return c.stateWritePathLocked(e, agent, e.Path, did)
+}
+
+func (c *Correlator) stateWritePathLocked(e event.Event, agent, path, did string) []model.Flag {
+	rel, inside := strings.CutPrefix(path, strings.TrimSuffix(c.stateDir, "/")+"/")
+	if (!inside && path != c.stateDir) || hookStatePath(rel) {
 		return nil
 	}
-	rel, inside := strings.CutPrefix(e.Path, c.stateDir+"/")
-	if (!inside && e.Path != c.stateDir) || hookStatePath(rel) {
-		return nil
-	}
-	flagID := hashFlagID(stateWriteRule+"|"+e.Path, e.PID, e.TS)
-	if !c.shouldFlag(flagID, stateWriteRule, e.PID, e.Path, e.TS, repeatWindows[stateWriteRule]) {
+	flagID := hashFlagID(stateWriteRule+"|"+path, e.PID, e.TS)
+	if !c.shouldFlag(flagID, stateWriteRule, e.PID, path, e.TS, repeatWindows[stateWriteRule]) {
 		return nil
 	}
 	at := e.TS.Format(time.RFC3339)
@@ -60,10 +68,10 @@ func (c *Correlator) stateWriteLocked(e event.Event, agent string) []model.Flag 
 		SessionID: e.SessionID,
 		Evidence: []model.EvidenceItem{{
 			Kind:  "file",
-			Label: e.Path,
+			Label: path,
 			Sub:   "monitor state file",
 			TS:    at,
-			Text:  fmt.Sprintf("%s (pid %d) %s %s in the monitor's state directory at %s", agent, e.PID, did, e.Path, at),
+			Text:  fmt.Sprintf("%s (pid %d) %s %s in the monitor's state directory at %s", agent, e.PID, did, path, at),
 		}},
 	}}
 }

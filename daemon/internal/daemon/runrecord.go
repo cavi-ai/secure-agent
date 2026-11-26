@@ -31,13 +31,17 @@ const (
 	// RunEndingNoRecord is a run whose record has a running marker and no ending.
 	RunEndingNoRecord RunEnding = "no-record"
 	// RunEndingUnconfirmedStop is a record that reports an owner stop for a run
-	// the event store holds no stop intent for.
+	// the event store holds no valid stop intent for.
 	RunEndingUnconfirmedStop RunEnding = "unconfirmed-owner-stop"
 )
 
 // StopIntentWindow is how long a stop intent stays valid: a signal later than
 // this after the intent ends the run as RunEndingSignal.
 const StopIntentWindow = 30 * time.Second
+
+func stopIntentValidAt(intent, at time.Time) bool {
+	return !intent.IsZero() && !at.Before(intent) && at.Sub(intent) <= StopIntentWindow
+}
 
 const runRecordSuffix = ".run-record.json"
 
@@ -125,9 +129,6 @@ type RunTracker struct {
 	rec             RunRecord
 	pending         []pendingRun
 	endingPersisted bool
-	// ownerStop is the previous run when its record reports an owner stop;
-	// raisePreviousRunFindings confirms it against the event store.
-	ownerStop *RunRecord
 }
 
 // StartRun writes this run's running marker and carries forward any previous
@@ -142,16 +143,12 @@ func StartRun(path string, pid int, now func() time.Time) (*RunTracker, error) {
 		found = true
 	}
 	t.pending = state.Pending
-	if found && state.Ending != RunEndingOwnerStop {
+	if found {
 		pending := pendingRun{PreviousRun: previousRun(state.RunRecord)}
 		if pending.Record.StartedAt.IsZero() {
 			pending.ObservedAt = t.rec.StartedAt
 		}
 		t.pending = append(t.pending, pending)
-	}
-	if found && state.Ending == RunEndingOwnerStop {
-		rec := state.RunRecord
-		t.ownerStop = &rec
 	}
 	return t, t.write(t.rec)
 }
@@ -159,6 +156,12 @@ func StartRun(path string, pid int, now func() time.Time) (*RunTracker, error) {
 // RecordStopIntent notes that the owner is about to stop the daemon and
 // returns when the intent was recorded and until when it counts.
 func (t *RunTracker) RecordStopIntent() (at, validUntil time.Time, err error) {
+	return t.recordStopIntent(nil)
+}
+
+// recordStopIntent keeps the store write and the run record update serialized
+// with Stop and other intents. A failed store write leaves the intent unchanged.
+func (t *RunTracker) recordStopIntent(storeIntent func(RunRecord) error) (at, validUntil time.Time, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	at = t.now().UTC()
@@ -167,6 +170,11 @@ func (t *RunTracker) RecordStopIntent() (at, validUntil time.Time, err error) {
 	}
 	rec := t.rec
 	rec.StopIntentAt = at
+	if storeIntent != nil {
+		if err := storeIntent(rec); err != nil {
+			return at, at, err
+		}
+	}
 	if err := t.write(rec); err != nil {
 		return at, at, err
 	}
@@ -185,7 +193,7 @@ func (t *RunTracker) Stop(cause RunEnding) (RunEnding, error) {
 	if t.rec.Ending == "" {
 		at := t.now().UTC()
 		ending := cause
-		if cause == RunEndingSignal && !t.rec.StopIntentAt.IsZero() && !at.Before(t.rec.StopIntentAt) && at.Sub(t.rec.StopIntentAt) <= StopIntentWindow {
+		if cause == RunEndingSignal && stopIntentValidAt(t.rec.StopIntentAt, at) {
 			ending = RunEndingOwnerStop
 		}
 		t.rec.EndedAt, t.rec.Ending = at, ending

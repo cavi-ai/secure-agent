@@ -119,6 +119,9 @@ type esEnvelope struct {
 			} `json:"target"`
 		} `json:"unlink"`
 		Rename *struct {
+			Source struct {
+				Path string `json:"path"`
+			} `json:"source"`
 			Destination esDestination `json:"destination"`
 		} `json:"rename"`
 		Create *struct {
@@ -223,16 +226,16 @@ func parseESLine(line []byte) (event.Event, agents.Lineage, esLineVerdict) {
 	var kind event.Kind
 	var filePath string
 	var detail string
-	var open event.Event
+	var out event.Event
 	var lineage agents.Lineage
 
 	if env.Event.Open != nil {
 		kind = event.KindFileOpen
 		filePath = env.Event.Open.File.Path
 		st := env.Event.Open.File.Stat
-		open.OpenFlags, open.FileMode, open.FileIno = env.Event.Open.FFlag, st.Mode, st.Ino
+		out.OpenFlags, out.FileMode, out.FileIno = env.Event.Open.FFlag, st.Mode, st.Ino
 		if t, err := time.Parse(time.RFC3339Nano, st.Birthtime); err == nil {
-			open.FileBirth = t.UnixNano()
+			out.FileBirth = t.UnixNano()
 		}
 	} else if env.Event.Exec != nil {
 		kind = event.KindExec
@@ -249,6 +252,7 @@ func parseESLine(line []byte) (event.Event, agents.Lineage, esLineVerdict) {
 	} else if env.Event.Rename != nil {
 		kind = event.KindFileWrite
 		filePath = env.Event.Rename.Destination.path()
+		out.RenameSource = env.Event.Rename.Source.Path
 	} else if env.Event.Create != nil {
 		kind = event.KindFileWrite
 		filePath = env.Event.Create.Destination.path()
@@ -286,9 +290,9 @@ func parseESLine(line []byte) (event.Event, agents.Lineage, esLineVerdict) {
 		return event.Event{}, agents.Lineage{}, esGarbage
 	}
 
-	open.Kind, open.TS, open.PID, open.PPID = kind, ts, pid, ppid
-	open.ExePath, open.Path, open.Detail = exe, filePath, detail
-	return open, lineage, esEvent
+	out.Kind, out.TS, out.PID, out.PPID = kind, ts, pid, ppid
+	out.ExePath, out.Path, out.Detail = exe, filePath, detail
+	return out, lineage, esEvent
 }
 
 // instigatedBy attributes a BTM or profile event to the process that asked
