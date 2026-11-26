@@ -171,6 +171,45 @@ func TestAssessmentPinsLocalhostAndIPv6ToLoopback(t *testing.T) {
 	}
 }
 
+func TestAssessmentPreservesIPv6RequestAuthority(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	expanded := fmt.Sprintf("[0:0:0:0:0:0:0:1]:%d", port)
+	canonical := "http://" + listener.Addr().String()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != expanded {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	srv.Listener.Close()
+	srv.Listener = listener
+	srv.Start()
+	defer srv.Close()
+
+	endpoints, _, err := selectEndpoints([]string{"http://" + expanded, canonical}, Inventory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endpoints) < 2 || endpoints[0] != "http://"+expanded || endpoints[1] != canonical {
+		t.Fatalf("endpoint selection lost distinct HTTP authorities: %v", endpoints)
+	}
+	report, err := Assess(context.Background(), endpoints[:2])
+	if err != nil || len(report.Services) != 2 {
+		t.Fatalf("assessment lost distinct HTTP authorities: %+v, %v", report, err)
+	}
+	for i, want := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		service := report.Services[i]
+		if service.Endpoint != canonical || service.Metadata.Status != want {
+			t.Errorf("service %d: got endpoint %q and HTTP %d, want %q and HTTP %d", i, service.Endpoint, service.Metadata.Status, canonical, want)
+		}
+	}
+}
+
 func TestAssessmentBoundsConcurrentServicesAndRejectsAmbiguousCORS(t *testing.T) {
 	var active, peak atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +244,7 @@ func TestAssessmentRejectsUnsafeBasePathsBeforeAnyRequest(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer srv.Close()
-	for _, p := range []string{"/../admin", "/a/./b", "/a%0Ab", "/a%5Cb", "//a"} {
+	for _, p := range []string{"/../admin", "/a/./b", "/a%0Ab", "/a%5Cb", "//a", "//", "/engines//"} {
 		t.Run(p, func(t *testing.T) {
 			if _, err := Assess(context.Background(), []string{srv.URL + p}); err == nil || calls.Load() != 0 {
 				t.Fatalf("unsafe base path accepted: err=%v requests=%d", err, calls.Load())
