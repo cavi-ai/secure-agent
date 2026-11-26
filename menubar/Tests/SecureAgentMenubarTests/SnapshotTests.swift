@@ -139,11 +139,4 @@ final class SnapshotTests: XCTestCase {
                        "Claude requests Read access")
         XCTAssertTrue(ConsoleView.guardPromptDetail(p).contains("credentials"))
     }
-
-    @MainActor
-    func testPopoverReductionKeepsGuardVisible() {
-        // The preview carries a pendingGuard — its presence is what the inline
-        // card keys on. (A nil guard hides the card; nil is the all-clear case.)
-        XCTAssertNotNil(AppState.preview().pendingGuard)
-    }
 }

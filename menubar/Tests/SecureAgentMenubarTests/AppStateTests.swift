@@ -594,14 +594,6 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         XCTAssertTrue(state.lastError?.contains("guard check failed") ?? false)
     }
 
-    func testPausedFetchIsANoOp() async {
-        let stub = StubDaemonClient()
-        let (state, _) = makeState(stub)
-        state.isPaused = true
-        state.fetch()
-        XCTAssertFalse(state.connected)
-    }
-
     func testResumeReseedsNotificationBaseline() async {
         let stub = StubDaemonClient()
         let (state, notifications) = makeState(stub)

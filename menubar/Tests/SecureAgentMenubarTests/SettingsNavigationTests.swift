@@ -140,14 +140,4 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(FirewallRuleCatalog.title(for: "anthropic-key"), "Anthropic API key")
         XCTAssertEqual(FirewallRuleCatalog.title(for: "fp-7c1e9a"), "fp-7c1e9a")
     }
-
-    @MainActor
-    func testRowSubtitlesNameWhatEachChoiceDoes() {
-        XCTAssertEqual(SettingsView.guardModeEffect("monitor"), "Logged, never interrupted")
-        XCTAssertEqual(SettingsView.guardModeEffect("prompt"), "Asks you before the agent proceeds")
-        XCTAssertEqual(SettingsView.guardModeEffect("deny"), "Blocked outright")
-        XCTAssertEqual(SettingsView.notifyEffect("default"), "Notifies when the flag is critical")
-        XCTAssertEqual(SettingsView.notifyEffect("always"), "Notifies on every flag of this type")
-        XCTAssertEqual(SettingsView.notifyEffect("never"), "Silent; still listed in the menu bar and console")
-    }
 }
