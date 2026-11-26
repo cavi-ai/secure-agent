@@ -165,6 +165,7 @@ def batch_worktrees(now_ms=None, *, multiple_repos=False):
 
     def removable(path, branch):
         return {"path": path, "branch": branch, "state": "remove", "stale": True,
+                "removal_identity": f"identity:{path}",
                 "last_activity": iso(21 * 86400000), "idle_days": 21, "size_bytes": 1610612736,
                 "reasons": ["merged into origin/main (squash)"]}
 

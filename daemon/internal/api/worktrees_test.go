@@ -221,7 +221,8 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: testHunter(t, st, home)}}).buildMux()
+	hunter := testHunter(t, st, home)
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Workspace: WorkspaceDeps{Worktrees: hunter}}).buildMux()
 	post := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/remove", strings.NewReader(body)))
@@ -255,7 +256,40 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 		t.Fatal("refused removal deleted the worktree")
 	}
 
-	if rec := post(`{"path":"` + clean + `"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed"`) || !strings.Contains(rec.Body.String(), `"bytes":`) {
+	if rec := post(`{"path":"` + clean + `","expected_identity":"` + strings.Repeat("0", 64) + `"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("mismatched identity: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(clean); err != nil {
+		t.Fatalf("mismatched removal changed the worktree: %v", err)
+	}
+	if _, err := hunter.AddRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/worktrees", nil))
+	var identities struct {
+		Repos []struct {
+			Worktrees []struct {
+				Path     string `json:"path"`
+				Identity string `json:"removal_identity"`
+			} `json:"worktrees"`
+		} `json:"repos"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &identities) != nil {
+		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
+	}
+	var identity string
+	for _, repo := range identities.Repos {
+		for _, row := range repo.Worktrees {
+			if row.Path == clean {
+				identity = row.Identity
+			}
+		}
+	}
+	if identity == "" {
+		t.Fatal("report omitted removable worktree identity")
+	}
+	if rec := post(`{"path":"` + clean + `","expected_identity":"` + identity + `"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed"`) || !strings.Contains(rec.Body.String(), `"bytes":`) {
 		t.Fatalf("clean: %d %s", rec.Code, rec.Body.String())
 	}
 	if _, err := os.Stat(clean); err == nil {

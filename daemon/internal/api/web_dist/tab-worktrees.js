@@ -526,6 +526,7 @@ function worktreeSelectionApproval(w, repo, rep) {
   // Sizes and advisor notes may arrive later without changing approval.
   // Keep the property order stable for exact comparisons after a refresh.
   return Object.freeze({ path: w.path, repo: repo.path, head: w.head || '', state: w.state,
+    removal_identity: w.removal_identity || '',
     can_remove_reviewed: w.can_remove_reviewed === true,
     branch: w.branch || '', detached: !!w.detached, reasons: Object.freeze([...(w.reasons || [])]),
     error: w.error || '', git_operation: w.git_operation || '', submodules: Number(w.submodules) || 0,

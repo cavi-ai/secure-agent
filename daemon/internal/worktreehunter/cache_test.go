@@ -212,6 +212,37 @@ func TestSavedScanWithoutReasonKindsIsRescanned(t *testing.T) {
 }
 
 // A size older than sizeTTL keeps answering while the sizer measures again.
+func TestLegacyScanGetsRemovalIdentitiesAfterRestart(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "done")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	now := func() time.Time { return time.Now().Add(48 * time.Hour) }
+	h := New(st, home, Options{})
+	h.now = now
+	report := h.Report(t.Context(), false)
+	h.Wait()
+	for i := range report.Repos {
+		for j := range report.Repos[i].Worktrees {
+			report.Repos[i].Worktrees[j].RemovalIdentity = ""
+		}
+	}
+	body, err := json.Marshal(savedReport{Options: normalize(Options{}), Report: report})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.PutScanCache(cacheReportKey, body, now())
+
+	restarted := New(st, home, Options{})
+	restarted.now = now
+	fresh := restarted.Report(t.Context(), false)
+	restarted.Wait()
+	if row := findRow(t, fresh, wt); fresh.Cached || row.RemovalIdentity == "" {
+		t.Fatalf("legacy report was not refreshed: cached=%v, identity=%q", fresh.Cached, row.RemovalIdentity)
+	}
+}
+
 func TestOldSizeAnswersWhileRemeasured(t *testing.T) {
 	home := isolateGit(t)
 	f := newFixture(t)

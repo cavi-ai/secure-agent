@@ -2,11 +2,14 @@ package worktreehunter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
@@ -36,6 +39,46 @@ func (e *NotRemovableError) Error() string {
 // tree: 200,000 files take 16 s on an external disk, past gitTimeout.
 const removeTimeout = 10 * time.Minute
 
+// RemovalOptions binds a request to a reported checkout and, when supplied,
+// the facts used to approve deletion of reviewed scratch files.
+type RemovalOptions struct {
+	ExpectedIdentity string
+	Review           *RemovalReview
+}
+
+func (o RemovalOptions) validate(path string) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("path must be absolute")
+	}
+	if o.Review != nil && (o.Review.Head == "" || len(o.Review.Reasons) == 0) {
+		return errors.New("reviewed head and reasons are required")
+	}
+	return nil
+}
+
+// removalIdentity covers the registered checkout and the disk objects a
+// new worktree at the same path would replace. The .git pointer timestamp
+// distinguishes registrations even if the filesystem reuses their inodes.
+func removalIdentity(repo string, l listed) string {
+	dir, err := os.Lstat(l.Path)
+	if err != nil || !dir.IsDir() {
+		return ""
+	}
+	pointer, err := os.Lstat(filepath.Join(l.Path, ".git"))
+	if err != nil || !pointer.Mode().IsRegular() {
+		return ""
+	}
+	disk, dirOK := dir.Sys().(*syscall.Stat_t)
+	gitFile, pointerOK := pointer.Sys().(*syscall.Stat_t)
+	if !dirOK || !pointerOK {
+		return ""
+	}
+	hash := sha256.New()
+	fmt.Fprintf(hash, "%q %q %q %q %t %d %d %d %d %d", repo, l.Path, l.Branch, l.Head, l.Detached,
+		disk.Dev, disk.Ino, gitFile.Dev, gitFile.Ino, pointer.ModTime().UnixNano())
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 // Remove inspects path again now and runs `git worktree remove` (never
 // --force) only when that fresh verdict is remove. The branch and every
 // commit stay; git itself still refuses a tree that turned dirty in between.
@@ -43,51 +86,37 @@ const removeTimeout = 10 * time.Minute
 // finishes even when ctx is canceled: a half-deleted worktree is worse than
 // a late answer. Its progress shows in Removals.
 func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
-	return h.removeRequested(ctx, path, nil)
+	return h.RemoveWithOptions(ctx, path, RemovalOptions{})
 }
 
 // RemoveReviewed permanently deletes an explicitly reviewed, clean worktree
 // and its ignored scratch files while retaining its branch and commits.
 func (h *Hunter) RemoveReviewed(ctx context.Context, path string, review RemovalReview) (Worktree, error) {
-	return h.removeRequested(ctx, path, &review)
+	return h.RemoveWithOptions(ctx, path, RemovalOptions{Review: &review})
 }
 
-func (h *Hunter) removeRequested(ctx context.Context, path string, review *RemovalReview) (Worktree, error) {
-	if !filepath.IsAbs(path) {
-		return Worktree{}, errors.New("path must be absolute")
-	}
-	if review != nil && (review.Head == "" || len(review.Reasons) == 0) {
-		return Worktree{}, errors.New("reviewed head and reasons are required")
+// RemoveWithOptions removes a freshly eligible worktree with any supplied
+// identity and review constraints.
+func (h *Hunter) RemoveWithOptions(ctx context.Context, path string, opts RemovalOptions) (Worktree, error) {
+	if err := opts.validate(path); err != nil {
+		return Worktree{}, err
 	}
 	job, err := h.beginRemoval(path)
 	if err != nil {
 		return Worktree{}, err
 	}
-	row, err := h.remove(context.WithoutCancel(ctx), path, job, review)
+	row, err := h.remove(context.WithoutCancel(ctx), path, job, opts)
 	job.finish(row, err)
 	return row, err
 }
 
-func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, review *RemovalReview) (Worktree, error) {
+func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, opts RemovalOptions) (Worktree, error) {
 	defer h.lockForAction(func() { p.phase(PhaseWaiting) })()
 
 	p.phase(PhaseChecking)
-	rs, l, err := h.locate(ctx, path)
+	rs, l, row, err := h.checkRemoval(ctx, path, opts)
 	if err != nil {
-		return Worktree{}, err
-	}
-	row := h.judge(ctx, rs, l)
-	if review != nil {
-		if err := validateRemovalReview(row, review); err != nil {
-			return row, err
-		}
-	} else if row.State != StateRemove {
-		return row, &NotRemovableError{Row: row}
-	}
-	for _, other := range rs.list {
-		if other.Path != l.Path && strings.HasPrefix(other.Path, l.Path+string(filepath.Separator)) {
-			return row, fmt.Errorf("%w: another registered worktree is inside this folder", ErrReviewChanged)
-		}
+		return row, err
 	}
 	// Measured now, not from the cache: this is the space the ledger books.
 	p.phase(PhaseMeasuring)
@@ -98,23 +127,20 @@ func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, rev
 		}
 	}
 	u := diskusage.Dir(ctx, l.Path, skip)
-	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
 	p.measured(u.Bytes, u.Files)
-	if review != nil {
-		freshRepo, freshListed, err := h.locate(ctx, path)
-		if err != nil {
-			return row, err
-		}
-		if err := validateRemovalReview(h.judge(ctx, freshRepo, freshListed), review); err != nil {
-			return row, err
-		}
-		for _, other := range freshRepo.list {
-			if other.Path != freshListed.Path && strings.HasPrefix(other.Path, freshListed.Path+string(filepath.Separator)) {
-				return row, fmt.Errorf("%w: another registered worktree is inside this folder", ErrReviewChanged)
-			}
-		}
+	if opts.Review != nil || opts.ExpectedIdentity != "" {
+		rs, l, row, err = h.checkRemoval(ctx, path, opts)
+	}
+	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
+	if err != nil {
+		return row, err
 	}
 	p.phase(PhaseDeleting)
+	if opts.ExpectedIdentity != "" {
+		if err := verifyRemovalIdentity(ctx, rs.ref, l.Path, opts.ExpectedIdentity); err != nil {
+			return row, err
+		}
+	}
 	// git refuses a worktree with submodules unless forced. The fresh
 	// verdict above already found the worktree and each submodule clean and
 	// every submodule commit on a remote; --force skips only git's own
@@ -140,6 +166,44 @@ func (h *Hunter) remove(ctx context.Context, path string, p removalProgress, rev
 	h.forgetSize(l.Path)
 	h.dropRow(l.Path)
 	return row, nil
+}
+
+func (h *Hunter) checkRemoval(ctx context.Context, path string, opts RemovalOptions) (*repoScan, listed, Worktree, error) {
+	rs, l, err := h.locate(ctx, path)
+	if err != nil {
+		return nil, listed{}, Worktree{}, err
+	}
+	row := h.judge(ctx, rs, l)
+	if opts.ExpectedIdentity != "" && row.RemovalIdentity != opts.ExpectedIdentity {
+		return nil, listed{}, row, ErrReviewChanged
+	}
+	if opts.Review != nil {
+		if err := validateRemovalReview(row, opts.Review); err != nil {
+			return nil, listed{}, row, err
+		}
+	} else if row.State != StateRemove {
+		return nil, listed{}, row, &NotRemovableError{Row: row}
+	}
+	for _, other := range rs.list {
+		if other.Path != l.Path && strings.HasPrefix(other.Path, l.Path+string(filepath.Separator)) {
+			return nil, listed{}, row, fmt.Errorf("%w: another registered worktree is inside this folder", ErrReviewChanged)
+		}
+	}
+	return rs, l, row, nil
+}
+
+// Verify the registration again after inspection, just before invoking git.
+func verifyRemovalIdentity(ctx context.Context, repo repoRef, path, expected string) error {
+	worktrees, err := listWorktrees(ctx, repo.Main)
+	if err != nil {
+		return err
+	}
+	for _, w := range worktrees {
+		if w.Path == path && removalIdentity(repo.Common, w) == expected {
+			return nil
+		}
+	}
+	return ErrReviewChanged
 }
 
 // dropRow takes a removed worktree out of the cached scan; the scan keeps

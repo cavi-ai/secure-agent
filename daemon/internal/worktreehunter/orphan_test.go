@@ -187,6 +187,35 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	h.Wait()
 }
 
+func TestSavedOrphanCountAfterTrash(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	one, two := filepath.Join(f.root, "one"), filepath.Join(f.root, "two")
+	run(t, f.main, "worktree", "add", "-q", "-b", "feat/one", one, "main")
+	run(t, f.main, "worktree", "add", "-q", "-b", "feat/two", two, "main")
+	if err := os.RemoveAll(f.main); err != nil {
+		t.Fatal(err)
+	}
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: one}, {Workspace: two}}
+	h := New(st, home, Options{})
+	h.goos = "darwin"
+	before := h.Report(t.Context(), false)
+	h.Wait()
+	if len(before.Errors) != 1 || !strings.Contains(before.Errors[0], "2 folders still point") {
+		t.Fatalf("initial errors = %q", before.Errors)
+	}
+	if _, err := h.TrashOrphan(t.Context(), one); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(st, home, Options{})
+	after := restarted.Report(t.Context(), false)
+	restarted.Wait()
+	if !after.Cached || len(after.Errors) != 1 || !strings.Contains(after.Errors[0], "1 folder still points") {
+		t.Fatalf("saved report after trash: cached=%v, errors=%q", after.Cached, after.Errors)
+	}
+}
+
 // agentAt reads every session at or under a folder: in use when any is
 // active, named by a live session before a newer ended one, and the newest
 // last_seen of all of them.

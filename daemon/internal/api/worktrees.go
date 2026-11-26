@@ -430,11 +430,12 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	limitBody(w, r)
 	var req struct {
-		Path   string                        `json:"path"`
-		Repo   string                        `json:"repo"`
-		Prune  bool                          `json:"prune"`
-		Async  bool                          `json:"async"`
-		Review *worktreehunter.RemovalReview `json:"review,omitempty"`
+		Path             string                        `json:"path"`
+		Repo             string                        `json:"repo"`
+		Prune            bool                          `json:"prune"`
+		Async            bool                          `json:"async"`
+		ExpectedIdentity *string                       `json:"expected_identity"`
+		Review           *worktreehunter.RemovalReview `json:"review,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Prune && req.Repo == "") || (!req.Prune && req.Path == "") {
 		http.Error(w, `Invalid payload: {"path"} or {"repo", "prune": true}`, http.StatusBadRequest)
@@ -452,6 +453,14 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reviewed head and reasons are required for permanent removal", http.StatusBadRequest)
 		return
 	}
+	opts := worktreehunter.RemovalOptions{Review: req.Review}
+	if req.ExpectedIdentity != nil {
+		if req.Prune || *req.ExpectedIdentity == "" {
+			http.Error(w, "expected_identity must name a single worktree", http.StatusBadRequest)
+			return
+		}
+		opts.ExpectedIdentity = *req.ExpectedIdentity
+	}
 	if req.Prune {
 		pruned, err := a.worktrees.Prune(r.Context(), req.Repo)
 		switch {
@@ -467,13 +476,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Async {
-		var rm worktreehunter.Removal
-		var err error
-		if req.Review != nil {
-			rm, err = a.worktrees.StartRemoveReviewed(req.Path, *req.Review)
-		} else {
-			rm, err = a.worktrees.StartRemove(req.Path)
-		}
+		rm, err := a.worktrees.StartRemoveWithOptions(req.Path, opts)
 		if errors.Is(err, worktreehunter.ErrRemoving) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -487,13 +490,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "removal": rm})
 		return
 	}
-	var row worktreehunter.Worktree
-	var err error
-	if req.Review != nil {
-		row, err = a.worktrees.RemoveReviewed(r.Context(), req.Path, *req.Review)
-	} else {
-		row, err = a.worktrees.Remove(r.Context(), req.Path)
-	}
+	row, err := a.worktrees.RemoveWithOptions(r.Context(), req.Path, opts)
 	var refused *worktreehunter.NotRemovableError
 	switch {
 	case errors.Is(err, worktreehunter.ErrRemoving):

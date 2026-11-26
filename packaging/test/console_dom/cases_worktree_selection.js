@@ -11,6 +11,7 @@
   const reasons = ['ignored files that only live here: .tmp/ (3 files, 1 MB)', 'merged into origin/main (squash)'];
   const row = (path, state, extra = {}) => ({
     path, state, head: 'a'.repeat(40), branch: `feat/${path.split('/').pop()}`,
+    removal_identity: state === 'remove' ? `identity:${path}` : undefined,
     idle_days: 20, reasons: ['merged into origin/main (squash)'], size_bytes: 1048576, ...extra,
   });
   const report = {
@@ -116,7 +117,8 @@
         document.getElementById('confirm-ok').click();
         await wait(() => writes.length === 2 && !window.SA.worktrees.selectionBusy);
         await idle();
-        probe.routes = writes.length === 2 && writes.some(write => write.path === '/worktrees/remove' && write.body.path === selectedSafe && !('async' in write.body))
+        probe.routes = writes.length === 2 && writes.some(write => write.path === '/worktrees/remove' && write.body.path === selectedSafe
+          && write.body.expected_identity === `identity:${selectedSafe}` && !('async' in write.body))
           && writes.some(write => write.path === '/worktrees/review-trash' && write.body.path === review);
         const trashed = writes.find(write => write.path === '/worktrees/review-trash');
         probe.payload = trashed?.body.head === 'a'.repeat(40) && JSON.stringify(trashed.body.reasons) === JSON.stringify(reasons);

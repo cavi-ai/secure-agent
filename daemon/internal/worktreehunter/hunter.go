@@ -132,10 +132,11 @@ type Hunter struct {
 	// goos picks the Trash layout (macOS or freedesktop); tests pin it.
 	goos string
 
-	mu       sync.Mutex
-	opts     Options
-	cached   *ScanReport
-	cachedAt time.Time
+	mu                  sync.Mutex
+	opts                Options
+	cached              *ScanReport
+	cachedAt            time.Time
+	cachedReportVersion int
 	// An invalidation can finish during a scan. Only scans that started
 	// after the last invalidation can publish a report.
 	cacheGeneration uint64
@@ -270,6 +271,7 @@ func (h *Hunter) scanLocked(ctx context.Context) ScanReport {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cacheGeneration == generation {
+		h.cachedReportVersion = cacheReportVersion
 		h.saveReportLocked(rep, h.now())
 	}
 	return rep
@@ -278,7 +280,7 @@ func (h *Hunter) scanLocked(ctx context.Context) ScanReport {
 // saveReportLocked updates the in-memory and saved reports. Caller holds mu.
 func (h *Hunter) saveReportLocked(rep ScanReport, at time.Time) {
 	h.cached, h.cachedAt = &rep, at
-	if body, err := json.Marshal(savedReport{Options: h.opts, Report: rep}); err == nil {
+	if body, err := json.Marshal(savedReport{Version: h.cachedReportVersion, Options: h.opts, Report: rep}); err == nil {
 		h.st.PutScanCache(cacheReportKey, body, at)
 	}
 }
@@ -298,8 +300,8 @@ func (h *Hunter) lockForAction(waiting func()) func() {
 }
 
 // dropFromCache takes rows (by path) and repository groups (by repository
-// path) out of the cached scan, with the error lines of the groups it
-// empties, recomputes the summary and saves it under the scan's own time.
+// path) out of the cached scan, updates error lines and counts, and saves
+// it under the scan's own time.
 // Callers hold the scan lock.
 func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 	h.mu.Lock()
@@ -309,10 +311,13 @@ func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 	}
 	rep := *h.cached
 	rep.Repos = nil
-	gone := map[string]bool{}
+	repoErrors := map[string]string{}
 	for _, r := range h.cached.Repos {
+		oldError := repoErrorLine(r)
+		if oldError != "" {
+			repoErrors[oldError] = ""
+		}
 		if repos[r.Path] {
-			gone[r.Path] = true
 			continue
 		}
 		kept := make([]Worktree, 0, len(r.Worktrees))
@@ -322,15 +327,20 @@ func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 			}
 		}
 		if r.Error == ErrRepoMissing && len(kept) == 0 {
-			gone[r.Path] = true
 			continue
 		}
 		r.Worktrees = kept
 		rep.Repos = append(rep.Repos, r)
+		if oldError != "" {
+			repoErrors[oldError] = repoErrorLine(r)
+		}
 	}
 	rep.Errors = nil
 	for _, e := range h.cached.Errors {
-		if repo, _, _ := strings.Cut(e, ": "); !gone[repo] {
+		if updated, ok := repoErrors[e]; ok {
+			e = updated
+		}
+		if e != "" {
 			rep.Errors = append(rep.Errors, e)
 		}
 	}
@@ -339,13 +349,15 @@ func (h *Hunter) dropFromCache(rows, repos map[string]bool) {
 }
 
 const (
-	cacheReportKey = "worktrees.report"
-	cacheSizesKey  = "worktrees.sizes"
+	cacheReportKey     = "worktrees.report"
+	cacheSizesKey      = "worktrees.sizes"
+	cacheReportVersion = 1 // saved rows include a removal identity
 )
 
 // savedReport is the stored scan with the options it was taken under; a
 // scan under other options is not loaded.
 type savedReport struct {
+	Version int        `json:"version"`
 	Options Options    `json:"options"`
 	Report  ScanReport `json:"report"`
 }
@@ -392,8 +404,12 @@ func (h *Hunter) loadLocked() {
 	defer h.mu.Unlock()
 	if body, at, ok := h.st.ScanCache(cacheReportKey); ok {
 		var saved savedReport
-		if json.Unmarshal(body, &saved) == nil && reflect.DeepEqual(normalize(saved.Options), h.opts) && kindsAligned(saved.Report) {
+		if json.Unmarshal(body, &saved) == nil && saved.Version <= cacheReportVersion &&
+			reflect.DeepEqual(normalize(saved.Options), h.opts) && kindsAligned(saved.Report) {
+			// A row action can use the old snapshot. The next report
+			// request scans once to acquire current removal identities.
 			h.cached, h.cachedAt = &saved.Report, at
+			h.cachedReportVersion = saved.Version
 		}
 	}
 }
@@ -404,7 +420,7 @@ func (h *Hunter) loadLocked() {
 func (h *Hunter) fresh(refresh bool, after time.Time) (ScanReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.cached == nil {
+	if h.cached == nil || h.cachedReportVersion != cacheReportVersion {
 		return ScanReport{}, false
 	}
 	if !refresh || (!after.IsZero() && h.cachedAt.After(after)) || h.now().Sub(h.cachedAt) < minRescan {
@@ -523,14 +539,9 @@ func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
 	rep.Repos = attachOrphans(rep.Repos, d.Orphans, activity, now, staleAfter)
 	sort.Slice(rep.Repos, func(i, j int) bool { return rep.Repos[i].Path < rep.Repos[j].Path })
 	for _, r := range rep.Repos {
-		if r.Error == "" {
-			continue
+		if line := repoErrorLine(r); line != "" {
+			rep.Errors = append(rep.Errors, line)
 		}
-		line := r.Path + ": " + r.Error
-		if r.Error == ErrRepoMissing && len(r.Worktrees) > 0 {
-			line += "; " + plural(len(r.Worktrees), "folder still points", "folders still point") + " to it"
-		}
-		rep.Errors = append(rep.Errors, line)
 	}
 	rep.Summary = summarize(rep.Repos)
 	if ctx.Err() != nil {
@@ -538,6 +549,17 @@ func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
 	}
 	rep.DurationMS = h.now().Sub(start).Milliseconds()
 	return rep
+}
+
+func repoErrorLine(r RepoReport) string {
+	if r.Error == "" {
+		return ""
+	}
+	line := r.Path + ": " + r.Error
+	if r.Error == ErrRepoMissing && len(r.Worktrees) > 0 {
+		line += "; " + plural(len(r.Worktrees), "folder still points", "folders still point") + " to it"
+	}
+	return line
 }
 
 // prepareRepo reads what every worktree of the repo shares: the worktree
@@ -593,6 +615,7 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 		f.Missing = true
 		return w, f
 	}
+	w.RemovalIdentity = removalIdentity(rs.ref.Common, l)
 
 	w.InUse, w.ActiveAgent, f.LastSession = agentAt(l.Path, activity, h.now())
 	f.HeadTime = headTime(ctx, l.Path)

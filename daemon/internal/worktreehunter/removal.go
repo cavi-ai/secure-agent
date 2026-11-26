@@ -120,20 +120,18 @@ func (j removalJob) finish(row Worktree, err error) {
 // StartRemove removes path in the background and returns the running
 // removal; Removals reports its steps and outcome.
 func (h *Hunter) StartRemove(path string) (Removal, error) {
-	return h.startRemove(path, nil)
+	return h.StartRemoveWithOptions(path, RemovalOptions{})
 }
 
-func (h *Hunter) StartRemoveReviewed(path string, review RemovalReview) (Removal, error) {
-	review.Reasons = slices.Clone(review.Reasons)
-	return h.startRemove(path, &review)
-}
-
-func (h *Hunter) startRemove(path string, review *RemovalReview) (Removal, error) {
-	if !filepath.IsAbs(path) {
-		return Removal{}, errors.New("path must be absolute")
+// StartRemoveWithOptions schedules a removal with the supplied constraints.
+func (h *Hunter) StartRemoveWithOptions(path string, opts RemovalOptions) (Removal, error) {
+	if err := opts.validate(path); err != nil {
+		return Removal{}, err
 	}
-	if review != nil && (review.Head == "" || len(review.Reasons) == 0) {
-		return Removal{}, errors.New("reviewed head and reasons are required")
+	if opts.Review != nil {
+		review := *opts.Review
+		review.Reasons = slices.Clone(review.Reasons)
+		opts.Review = &review
 	}
 	job, err := h.beginRemoval(path)
 	if err != nil {
@@ -142,7 +140,7 @@ func (h *Hunter) startRemove(path string, review *RemovalReview) (Removal, error
 	h.remWG.Add(1)
 	go func() {
 		defer h.remWG.Done()
-		row, err := h.remove(context.Background(), path, job, review)
+		row, err := h.remove(context.Background(), path, job, opts)
 		job.finish(row, err)
 	}()
 	return h.removal(job.path), nil

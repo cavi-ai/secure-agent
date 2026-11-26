@@ -35,6 +35,7 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
     worktreesState: { report: null, loading: false, loadingRefresh: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
       ledger: null, ledgerLoading: false, ledgerAt: 0, selected: new Map(), expanded: new Set(), selectionBusy: false, pendingRemovalSelections: new Map() },
     worktreeReloadQueued: false,
+    worktreeReportRevision: 0,
     removalGroup: { paths: [], labels: {}, hidden: false, finished: false },
     removalTicker: null,
     removalLinger: null,
@@ -119,23 +120,27 @@ function worktreeCtlApplyRefusal(rep, path, removal) {
   }
 }
 
-// Keep outcomes newer than the scan. When a POST lost its reply, reconcile
-// it with the daemon job started at or after that request.
+// Keep outcomes newer than the scan. A newer daemon job supersedes a
+// local result, and a job that matches a lost POST resolves its outcome.
 function worktreeCtlOverlayRemovals(s, rep) {
   const scanned = Date.parse(rep.generated_at);
-  const previous = s.worktreesState.report?.removals || {};
+  const { removalGroup } = s;
   for (const [path, removal] of s.removals) {
-    if (removal.state === 'unknown') {
-      const server = rep.removals?.[path];
-      if (server && Date.parse(server.started_at) >= Date.parse(removal.started_at)) {
-        if (server.state !== 'running') {
-          s.removals.set(path, server);
-          if (server.state === 'removed' && !s.removalGroup.paths.includes(path)) worktreeCtlLoadLedger(s);
-        }
-        if (previous[path]?.state === 'unknown') s.removalGroup.finished = false;
-        continue;
+    const server = rep.removals?.[path];
+    const started = Date.parse(server?.started_at);
+    const newerJob = started > Date.parse(removal.finished_at);
+    const matchesLostReply = removal.state === 'unknown' && started >= Date.parse(removal.started_at);
+    if (newerJob || matchesLostReply) {
+      s.removals.delete(path);
+      if (removalGroup.paths.includes(path)) {
+        removalGroup.finished = false;
+        clearTimeout(s.removalLinger);
+      } else if (server.state === 'removed') {
+        worktreeCtlLoadLedger(s);
       }
-    } else if (scanned > Date.parse(removal.finished_at)) {
+      continue;
+    }
+    if (removal.state !== 'unknown' && scanned > Date.parse(removal.finished_at)) {
       s.removals.delete(path);
       continue;
     }
@@ -244,6 +249,7 @@ async function worktreeCtlLoadWorktrees(s, refresh, afterMutation = false) {
     return;
   }
   worktreesState.loading = true;
+  const revision = s.worktreeReportRevision;
   worktreesState.loadingRefresh = !!refresh;
   worktreesState.error = '';
   markDirty('worktrees');
@@ -251,15 +257,21 @@ async function worktreeCtlLoadWorktrees(s, refresh, afterMutation = false) {
     const r = await request('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
     if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
     const rep = await r.json();
-    if (s.worktreeReloadQueued) return;
+    if (s.worktreeReloadQueued || revision !== s.worktreeReportRevision) return;
     worktreeCtlOverlayRemovals(s, rep);
     worktreesState.report = rep;
     worktreeCtlReconcileWorktreeSelection(s);
     worktreesState.loadedAt = now();
+    const hadTrackedRemovals = removalGroup.paths.length > 0;
+    removalGroup.paths = removalGroup.paths.filter(path => {
+      if (rep.removals?.[path]) return true;
+      delete removalGroup.labels[path];
+      return false;
+    });
     worktreeCtlAdoptRemovals(s, rep);
-    if (removalGroup.paths.length) worktreeCtlPaintRemovalToast(s);
+    if (hadTrackedRemovals || removalGroup.paths.length) worktreeCtlPaintRemovalToast(s);
   } catch (err) {
-    if (!s.worktreeReloadQueued) {
+    if (!s.worktreeReloadQueued && revision === s.worktreeReportRevision) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) toast(worktreesState.error, 'danger');
     }
@@ -345,7 +357,8 @@ function worktreeCtlActivate(s, view) {
 // the Trash, so the tab updates without reading the report.
 function worktreeCtlDropWorktreeRows(s, paths) {
   const { worktreesState } = s;
-  if (!worktreesState.report) return;
+  if (!worktreesState.report || !paths.length) return;
+  s.worktreeReportRevision++;
   worktreeCtlDropRows(worktreesState.report, paths);
   for (const path of paths) {
     worktreesState.selected.delete(path);
@@ -507,7 +520,9 @@ async function worktreeCtlPostWorktree(s, path, body, timeoutMs = WORKTREE_TIMEO
 async function worktreeCtlRemoveWorktree(s, path, branch) {
   const { confirm, toast } = s;
   const current = worktreeCtlSelectedWorktree(s, path);
-  const reviewed = current?.approval?.can_remove_reviewed ? current.approval : null;
+  const approval = current?.approval;
+  if (!approval || !worktreeDeletesPermanently(approval)) return;
+  const reviewed = approval.can_remove_reviewed ? approval : null;
   const rows = reviewed ? [{approval:reviewed,size:current.w}] : null;
   const ok = await confirm(
     reviewed ? worktreeSelectionConfirm(rows) : `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
@@ -517,7 +532,7 @@ async function worktreeCtlRemoveWorktree(s, path, branch) {
     toast('Inspection facts changed. Review the worktree again before deletion.', 'info');
     return;
   }
-  await worktreeCtlRemoveRows(s, [reviewed || { path, branch }]);
+  await worktreeCtlRemoveRows(s, [approval]);
 }
 
 // removeRows: one removal request per row, one after another in the given
@@ -545,16 +560,22 @@ async function worktreeCtlRemoveRows(s, rows) {
 // row leaves on success; on a refusal or failure it stays, with the fresh
 // verdict when the reply carries one, and a mark taken for it comes back.
 async function worktreeCtlRemoveOne(s, w) {
-  const { worktreesState, render, now } = s;
+  const { render, now } = s;
   const path = w.path;
   const at = new Date(now()).toISOString();
+  const current = worktreeCtlSelectedWorktree(s, path)?.w;
+  if (!w.removal_identity || current?.removal_identity !== w.removal_identity || current.state !== w.state) {
+    worktreeCtlFinishRemoval(s, path, { path, state: 'failed',
+      error: 'Worktree inspection changed. Rescan and confirm the worktree again.', finished_at: at });
+    return;
+  }
   worktreeCtlSetRemoval(s, path, { path, state: 'running', phase: 'checking', step: 'checking it is still safe to remove', started_at: at, step_at: at });
   render(['worktrees']);
   worktreeCtlPaintRemovalToast(s);
   let reply = null;
   let failure = '';
   try {
-    reply = await worktreeCtlPostWorktree(s, '/worktrees/remove', { path,
+    reply = await worktreeCtlPostWorktree(s, '/worktrees/remove', { path, expected_identity: w.removal_identity,
       ...(w.can_remove_reviewed ? { review: { head: w.head, reasons: w.reasons } } : {}) }, WORKTREE_REMOVE_TIMEOUT_MS);
   } catch (err) {
     failure = String(err.message || err);
@@ -572,9 +593,13 @@ async function worktreeCtlRemoveOne(s, w) {
   } else {
     removal = { path, state: 'failed', error: text.trim() || String(r.status), finished_at };
   }
+  worktreeCtlFinishRemoval(s, path, removal);
+}
+
+function worktreeCtlFinishRemoval(s, path, removal) {
   worktreeCtlSetRemoval(s, path, removal);
   worktreeCtlRestoreMark(s, path, removal);
-  render(['worktrees']);
+  s.render(['worktrees']);
   worktreeCtlPaintRemovalToast(s);
 }
 
@@ -600,12 +625,13 @@ async function worktreeCtlRemoveAllWorktrees(s, repoPath) {
   const repo = rep && (rep.repos || []).find(r => r.path === repoPath);
   const rows = removableRows(repo, rep && rep.removals);
   if (!rows.length) return;
+  const approved = rows.map(w => ({ ...w }));
   const bytes = rows.reduce((n, w) => n + (Number(w.size_bytes) || 0), 0);
   const ok = await confirm(
     `git deletes ${rows.length} worktrees of ${repoPath}${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files. Their branches and commits stay; each is checked again before it goes.`,
     { title: 'Remove all', okLabel: `Remove ${rows.length}` });
   if (!ok) return;
-  await worktreeCtlRemoveRows(s, rows);
+  await worktreeCtlRemoveRows(s, approved);
 }
 
 // Remove every removable worktree of every repository after one dialog
@@ -615,6 +641,7 @@ async function worktreeCtlRemoveAllRemovable(s) {
   if (worktreesState.selectionBusy) return;
   const { rows, bytes } = removableEverywhere(worktreesState.report);
   if (!rows.length) return;
+  const approved = rows.map(({ w }) => ({ ...w }));
   const perRepo = new Map();
   for (const { repo } of rows) perRepo.set(repo.path, (perRepo.get(repo.path) || 0) + 1);
   const list = [...perRepo].map(([p, n]) => `${p} (${n})`).join(', ');
@@ -622,7 +649,7 @@ async function worktreeCtlRemoveAllRemovable(s) {
     `git deletes ${rows.length} worktrees${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files: ${list}. Their branches and commits stay; each is checked again before it goes.`,
     { title: 'Remove all removable worktrees', okLabel: `Remove ${rows.length}` });
   if (!ok) return;
-  await worktreeCtlRemoveRows(s, rows.map(r => r.w));
+  await worktreeCtlRemoveRows(s, approved);
 }
 
 // Folders git no longer records: open in Finder, link again to the
@@ -872,6 +899,7 @@ async function worktreeCtlHideWorktreeRepo(s, repo) {
   try {
     const { r, text } = await worktreeCtlPostWorktree(s, '/worktrees/repos', { path: repo, hidden: true });
     if (!r.ok) throw new Error(text.trim() || String(r.status));
+    s.worktreeReportRevision++;
     const rep = worktreesState.report;
     if (rep) rep.repos = (rep.repos || []).filter(x => x.path !== repo);
     worktreeCtlReconcileWorktreeSelection(s);
