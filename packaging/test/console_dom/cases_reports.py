@@ -439,7 +439,7 @@ def run_empty_spend_report(page):
 ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'modal', 'pendingRetained', 'final', 'focus']
 # The probe reports focus as held for a failed or interrupted write.
 INTERRUPTED_ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'modal', 'pendingRetained', 'final']
-USAGE_FIELDS = ['selected', 'matches', 'focus', 'detail', 'reset']
+USAGE_FIELDS = ['keyboardGuidance', 'selected', 'matches', 'focus', 'detail', 'reset']
 # The wide variant opens the resource policy editor instead of writing.
 WIDE_ATTENTION_FIELDS = ['initial', 'evidenceOpen', 'named', 'final']
 # At 1440px with the navigation shown, docking the wide drawer would leave the

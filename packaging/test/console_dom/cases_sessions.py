@@ -310,6 +310,15 @@ def run_memory_by_family_2(page):
         f"probe={pre(dom_memprobe, 'mem-probe')!r}",
     )
 
+def run_session_pulse_motion(page):
+    for reduced, expected in [(False, 'animated'), (True, 'still')]:
+        dom = page.dom(served=True, window_size=(1280, 800), reduced_motion=reduced,
+                       fixture={'script': 'cases_session_pulse.js'})
+        actual = pre(dom, 'session-pulse-motion')
+        preference = 'reduce' if reduced else 'no-preference'
+        page.check(f'Session pulse ({preference}): {expected}', actual == expected, repr(actual))
+
+
 def run_session_activity(page):
     check = page.check
     for label, size in [('desktop', (1280, 800)), ('narrow', (375, 800))]:
@@ -670,6 +679,7 @@ CASES = (
     Case('session_chip_count', run_session_chip_count, ('dom_session',)),
     Case('session_scopes_findings_list', run_session_scopes_findings_list, ('dom_session',)),
     Case('memory_by_family_2', run_memory_by_family_2, ('dom_memprobe',)),
+    Case('session_pulse_motion', run_session_pulse_motion),
     Case('session_activity', run_session_activity, ()),
     Case('session_investigation', run_session_investigation, ()),
     Case('session_permissions', run_session_permissions, ()),

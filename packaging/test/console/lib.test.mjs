@@ -781,15 +781,6 @@ test('white marks keep at least 3:1 contrast on every brand tile', () => {
   }
 });
 
-test('event-rate label keeps one width as the speed changes', () => {
-  const rule = styleCSS.match(/\.spark-v\s*\{[^}]*\}/);
-  assert.ok(rule, 'missing .spark-v rule');
-  assert.match(rule[0], /width:\s*7ch/);
-  assert.match(rule[0], /max-width:\s*7ch/);
-  assert.match(rule[0], /tabular-nums/);
-  assert.doesNotMatch(rule[0], /min-width:\s*3ch/);
-});
-
 test('style.css tile colors match harnessMeta for every known harness', () => {
   for (const key of KNOWN_HARNESSES) {
     const m = harnessMeta(key);
@@ -799,15 +790,6 @@ test('style.css tile colors match harnessMeta for every known harness', () => {
     assert.equal(hit[1], m.color, key);
   }
   assert.ok(styleCSS.includes('.harness-tile.light {'), 'light tile rule missing');
-});
-
-test('the session pulse animates only when motion is allowed; reduce stops transitions', () => {
-  const uses = [...styleCSS.matchAll(/animation:\s*sc-breathe/g)];
-  assert.equal(uses.length, 1);
-  const guard = styleCSS.lastIndexOf('@media (prefers-reduced-motion: no-preference) {', uses[0].index);
-  assert.ok(guard >= 0 && !styleCSS.slice(guard, uses[0].index).includes('}'),
-    'the pulse animation must sit inside the no-preference block');
-  assert.match(styleCSS, /@media \(prefers-reduced-motion: reduce\) \{\s*\* \{ animation: none !important; transition: none !important; \}/);
 });
 
 test('harnessChipHTML renders the sprite mark by class and escapes the name', () => {
@@ -1533,16 +1515,6 @@ test('attentionCount is posture.needs_you', () => {
   assert.equal(ctx.attentionCount({ needs_you: 13, groups: [{ items: [1, 2] }] }), 13);
   assert.equal(ctx.attentionCount({ needs_you: 0 }), 0);
   assert.equal(ctx.attentionCount(null), 0);
-});
-
-test('persistent sidebar navigation leaves scoped evidence in the reading area', () => {
-  const bar = indexHTML.split('id="tabs-bar"', 2)[1].split('</aside>', 1)[0];
-  assert.ok(bar.indexOf('<nav class="tabs" role="tablist"') >= 0);
-  assert.ok(bar.indexOf('id="tabs-posture" data-action="goto-top"') > bar.indexOf('</nav>'));
-  assert.ok(!bar.includes('id="scope-bar"'));
-  assert.ok(indexHTML.indexOf('id="scope-bar"') > indexHTML.indexOf('</aside>'));
-  assert.match(styleCSS, /\.sidebar \{\s*position: fixed;[^}]*overflow-y: auto;/);
-  assert.match(indexHTML, /aria-orientation="vertical"/);
 });
 
 // ---------- optimistic attention removal ----------

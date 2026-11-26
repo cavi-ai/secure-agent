@@ -19,7 +19,6 @@ const status = { enabled: true, reachable: true, model: H, harness_model: H, oll
   skills: [{ id: H, summary: H, title: H }] };
 
 const cases = {
-  'chat off': () => ctx.agentOffHTML(),
   'note turn': () => ctx.agentMessageHTML({ role: 'note', content: H }, status),
   'user turn': () => ctx.agentMessageHTML({ role: 'user', content: H, harness: 'claude', workdir: H }, status),
   'worktree turn': () => ctx.agentMessageHTML({ role: 'user', origin: 'worktree', content: `${H}?\nbranch: ${H}\n${H}` }, status),
@@ -71,7 +70,6 @@ const dispatch = (plan, mode, attrs, label) => `<button type="button" class="btn
 const memoryHead = n => `<p class="agent-history-empty">Recorded facts for this project. Historical checks must be repeated before removal. Showing ${n} of ${n} matching facts.</p>`;
 
 const expected = {
-  'chat off': `<div class="agent-off">\n    <h3>Secure Agent chat is off</h3>\n    <p>Chat directly with your local Ollama agent. It can propose an exact local command for your review; nothing runs until you confirm it. Harness handoff is a separate, optional section.</p>\n    <p>Open the Secure Agent menu bar app, then Settings → Secure Agent → Chat and turn on Enable chat. Return here to start a conversation.</p>\n    <p>For a headless install, add this to <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>\n    <pre class="agent-snippet">system_agent:\n  enabled: true</pre>\n    <div>${copy('system_agent:\n  enabled: true')}</div>\n  </div>`,
   'note turn': `<div class="agent-msg note"><span>${E}</span></div>`,
   'user turn': `<div class="agent-msg user"><div class="agent-bubble">${E}</div><div class="agent-msg-meta">legacy harness selection (chat stayed on Ollama) · ${E}</div></div>`,
   'worktree turn': `<div class="agent-msg user"><div class="agent-proposal agent-worktree-card">\n    <div class="agent-proposal-head"><svg class="icon"><use href="#i-branch"/></svg><b>${E}?</b></div>\n    <div class="agent-msg-meta">branch ${E}</div>\n    <details class="agent-task"><summary>Facts sent</summary><pre>${E}?\nbranch: ${E}\n${E}</pre></details>\n  </div></div>`,

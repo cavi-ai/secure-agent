@@ -14,7 +14,7 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-agent.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { agentStateText, agentOffHTML, agentMessageHTML, agentThreadItems, agentPlanHTML, agentRunHTML, agentRunCommand,
+const { agentStateText, agentMessageHTML, agentThreadItems, agentPlanHTML, agentRunHTML, agentRunCommand,
   agentHarnessesHTML, agentSkillsHTML, agentHarnessOptionsHTML, agentDispatchMessage, agentEmptyThreadHTML, agentRecommendationHTML, resolveConsoleRoute, routeKey } = ctx;
 
 const XSS = '<img src=x onerror=alert(1)>';
@@ -103,15 +103,6 @@ test('agentStateText: loading, off, Ollama down, a reason, ready', () => {
   assert.equal(agentStateText({ enabled: true, reachable: false, endpoint: 'http://127.0.0.1:11434' }), 'Ollama is not answering at http://127.0.0.1:11434');
   assert.equal(agentStateText({ enabled: true, reachable: true, reason: 'model x is not pulled' }), 'model x is not pulled');
   assert.equal(agentStateText(status()), 'qwen3:latest on Ollama 0.15.1 · stays on this machine');
-});
-
-test('agentOffHTML: says how to turn it on and offers the snippet to copy', () => {
-  const html = agentOffHTML();
-  assert.match(html, /Secure Agent chat is off/);
-  assert.match(html, /Settings → Secure Agent → Chat/);
-  assert.match(html, /system_agent:\n  enabled: true/);
-  assert.match(html, /data-action="agent-copy" data-text="system_agent:/);
-  assert.match(html, /~\/\.config\/secure-agent\/config\.yaml/);
 });
 
 test('a worktree question renders as a compact card: the ask, the branch, the facts in a disclosure; replies render as usual', () => {
