@@ -198,3 +198,28 @@ func TestAssessmentBoundsConcurrentServicesAndRejectsAmbiguousCORS(t *testing.T)
 		}
 	}
 }
+
+// A base path with empty or dot segments, control characters or a backslash
+// is refused before any request; a path of plain segments reaches the server.
+func TestAssessmentRejectsUnsafeBasePathsBeforeAnyRequest(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+	for _, p := range []string{"/../admin", "/a/./b", "/a%0Ab", "/a%5Cb", "//a"} {
+		t.Run(p, func(t *testing.T) {
+			if _, err := Assess(context.Background(), []string{srv.URL + p}); err == nil || calls.Load() != 0 {
+				t.Fatalf("unsafe base path accepted: err=%v requests=%d", err, calls.Load())
+			}
+		})
+	}
+
+	var got atomic.Value
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got.Store(r.URL.Path) }))
+	defer ok.Close()
+	if _, err := Assess(context.Background(), []string{ok.URL + "/engines/llama.cpp/v1/"}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := got.Load().(string); p != "/engines/llama.cpp/v1/models" {
+		t.Fatalf("request path = %q, want /engines/llama.cpp/v1/models", p)
+	}
+}

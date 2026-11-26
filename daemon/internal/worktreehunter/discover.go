@@ -69,9 +69,9 @@ func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
 	dir = filepath.Clean(dir)
 	for {
 		dotGit := filepath.Join(dir, ".git")
-		st, err := os.Lstat(dotGit)
+		st, err := lstatGitEntry(dir)
 		if err == nil {
-			if st.IsDir() {
+			if st.Mode&unix.S_IFMT == unix.S_IFDIR {
 				if !isGitDirectory(dotGit) {
 					return repoRef{}, nil, false
 				}
@@ -92,6 +92,19 @@ func resolveRepo(dir string) (ref repoRef, orphan *orphanDir, ok bool) {
 		}
 		dir = parent
 	}
+}
+
+// lstatGitEntry stats dir's .git entry through a descriptor on dir, without
+// following a link at that entry.
+func lstatGitEntry(dir string) (unix.Stat_t, error) {
+	var st unix.Stat_t
+	parent, err := safefile.OpenLookupDir(dir)
+	if err != nil {
+		return st, err
+	}
+	defer unix.Close(parent)
+	err = unix.Fstatat(parent, ".git", &st, unix.AT_SYMLINK_NOFOLLOW)
+	return st, err
 }
 
 // resolveGitFile follows a worktree's (or submodule's) .git file.
