@@ -11,6 +11,47 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
+func TestAdvisorVerdictsUsePersistedKinds(t *testing.T) {
+	db, err := store.Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	sub := &Subscriber{sink: db}
+	write := verdictRun(func(context.Context, *Subscriber, task) (model.AdvisorVerdict, error) {
+		return model.AdvisorVerdict{Rationale: "stored verdict"}, nil
+	})
+
+	// Store and API readers look up verdicts by these persisted names.
+	for _, tc := range []struct {
+		key  string
+		kind *taskKind
+	}{
+		{"flag", flagKind},
+		{"incident", incidentKind},
+		{"host", hostKind},
+		{"guard", guardKind},
+		{"worktree", worktreeKind},
+		{"project", projectKind},
+		{"egress", egressKind},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			subjectID := "subject:" + tc.key
+			if err := write(context.Background(), sub, task{kind: tc.kind, subjectID: subjectID}); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := db.AdvisorVerdictResultFor(subjectID, tc.key)
+			if err != nil || !found || got.Rationale != "stored verdict" {
+				t.Fatalf("read persisted %q verdict: got %+v, found %t, error %v", tc.key, got, found, err)
+			}
+		})
+	}
+}
+
 // Kinds someone asked for run under the on-request timeout; the rest under
 // the triage client's.
 func TestTaskKindTimeoutClass(t *testing.T) {

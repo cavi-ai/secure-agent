@@ -19,6 +19,44 @@ final class WirePayloadContractTests: XCTestCase {
         assertDecodes("/guard/path-allow", as: [GuardPathAllowModel].self)
     }
 
+    func testEventDecodesTraceFields() throws {
+        let payload = """
+        {
+          "kind": 10, "ts": "2026-09-17T12:00:00Z", "pid": 42,
+          "tool": "read_file", "tool_status": "success", "duration_ms": 50,
+          "model": "local-model", "tokens_in": 100, "tokens_out": 20, "cost_usd": 0.125
+        }
+        """
+        let event = try JSONDecoder().decode(EventModel.self, from: Data(payload.utf8))
+        XCTAssertEqual(event.tool, "read_file")
+        XCTAssertEqual(event.toolStatus, "success")
+        XCTAssertEqual(event.durationMs, 50)
+        XCTAssertEqual(event.model, "local-model")
+        XCTAssertEqual(event.tokensIn, 100)
+        XCTAssertEqual(event.tokensOut, 20)
+        XCTAssertEqual(event.costUsd, 0.125)
+    }
+
+    func testIncidentDecodesAggregationFields() throws {
+        let payload = """
+        [{
+          "id": "i1", "flag_id": "f1", "pid": 42, "agent": "codex",
+          "timestamp": "2026-09-17T12:00:00Z", "rule": "rule", "summary": "Repeated event",
+          "risk": "HIGH", "touched_files": [], "connections": [], "rotate_list": [],
+          "session_id": "session-1", "subject": "example.test", "aggregate_count": 3,
+          "last_flag_at": "2026-09-17T12:05:00Z"
+        }]
+        """
+        let incidents = try DaemonClient.decodeBody(
+            [IncidentReportModel].self, path: "/incidents", body: Data(payload.utf8)
+        )
+        let incident = try XCTUnwrap(incidents.first)
+        XCTAssertEqual(incident.sessionId, "session-1")
+        XCTAssertEqual(incident.subject, "example.test")
+        XCTAssertEqual(incident.aggregateCount, 3)
+        XCTAssertEqual(incident.lastFlagAt, "2026-09-17T12:05:00Z")
+    }
+
     func testUnsetOptionalsNamesEveryNilField() {
         let flag = FlagModel(id: "f", rule: "r", severity: 1, ts: "t", pid: 1, agent: "a", evidence: [])
         XCTAssertTrue(unsetOptionals(flag).contains("$.sessionId"))

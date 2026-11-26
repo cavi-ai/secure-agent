@@ -96,12 +96,22 @@ func TestIncidentReportWireShape(t *testing.T) {
 		"summary", "risk", "touched_files", "connections", "rotate_list",
 		"advisor_narrative")
 
-	var back IncidentReport
-	if err := json.Unmarshal(raw, &back); err != nil {
+	var wire struct {
+		Risk       string `json:"risk"`
+		RotateList []struct {
+			Category string `json:"category"`
+			Risk     string `json:"risk"`
+		} `json:"rotate_list"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if back.Risk != RiskCritical || len(back.RotateList) != 1 || back.RotateList[0].Category != CategoryCloudCreds {
-		t.Errorf("round trip mismatch: %+v", back)
+	if wire.Risk != "CRITICAL" {
+		t.Errorf("incident wire risk = %q, want CRITICAL", wire.Risk)
+	}
+	if len(wire.RotateList) != 1 || wire.RotateList[0].Risk != "HIGH" ||
+		wire.RotateList[0].Category != "CLOUD_CREDENTIALS" {
+		t.Errorf("unexpected wire rotation list: %+v", wire.RotateList)
 	}
 }
 
