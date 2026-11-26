@@ -498,6 +498,10 @@ final class TelemetryDoctorTests: XCTestCase {
         XCTAssertTrue(DoctorFix.canFixAll([pass, fail]))
     }
 
+    func testOnlyPaneFixesWaitForTheUser() {
+        XCTAssertEqual(DoctorFix.allCases.filter(\.needsUser), [.openLoginItems, .openFullDiskAccess])
+    }
+
     func testDaemonRecoveryInstructionsAndHookSetupAreVisible() {
         let checks = TelemetryDoctor.evaluate(facts {
             $0.daemonChecks = [

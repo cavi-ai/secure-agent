@@ -23,6 +23,15 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(SettingsSection.allCases.flatMap(\.tabs), SettingsTab.allCases)
     }
 
+    /// "Settings → Secure Agent → Chat|Traffic" in the README, the daemon's
+    /// Doctor fixes and the web console stay true paths.
+    func testSecureAgentSectionHoldsChatAnalysisTraffic() {
+        XCTAssertEqual(SettingsSection.secureAgent.rawValue, "Secure Agent")
+        XCTAssertEqual(SettingsSection.secureAgent.tabs, [.chat, .analysis, .traffic])
+        XCTAssertEqual(SettingsTab.chat.title, "Chat")
+        XCTAssertEqual(SettingsTab.traffic.title, "Traffic")
+    }
+
     private func defaultsYAML() throws -> String {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

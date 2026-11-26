@@ -19,6 +19,12 @@ final class WirePayloadContractTests: XCTestCase {
         assertDecodes("/guard/path-allow", as: [GuardPathAllowModel].self)
     }
 
+    func testUnsetOptionalsNamesEveryNilField() {
+        let flag = FlagModel(id: "f", rule: "r", severity: 1, ts: "t", pid: 1, agent: "a", evidence: [])
+        XCTAssertTrue(unsetOptionals(flag).contains("$.sessionId"))
+        XCTAssertFalse(unsetOptionals(flag).contains("$.rule"))
+    }
+
     private func assertDecodes<T: Decodable>(_ path: String, as type: T.Type,
                                              file: StaticString = #filePath, line: UInt = #line) {
         for (variant, payloads) in [("full", WirePayloads.full), ("empty", WirePayloads.empty)] {

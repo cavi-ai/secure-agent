@@ -55,4 +55,8 @@ final class ESCardStateTests: XCTestCase {
         XCTAssertTrue(ESStage.grantInstruction.contains("Secure Agent"))
         XCTAssertTrue(ESStage.grantInstruction.contains("Full Disk Access"))
     }
+
+    func testOnlySettingsStepsPoll() {
+        XCTAssertEqual(ESStage.allCases.filter(\.awaitsUser), [.requiresApproval, .needsGrant, .needsRegrant])
+    }
 }

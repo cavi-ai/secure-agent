@@ -27,6 +27,12 @@ final class GuardTests: XCTestCase {
         XCTAssertTrue(s.contains("\"verdict\":\"allow\""))
     }
 
+    func testClassicsAreFourPromptRules() {
+        XCTAssertEqual(SetupManager.guardClassics.map { $0.ruleID }.sorted(),
+                       ["cloud-creds", "harness-config", "keychain", "ssh-keys"])
+        XCTAssertTrue(SetupManager.guardClassics.allSatisfy { $0.mode == "prompt" })
+    }
+
     // MARK: - advisor config YAML helpers
 
     func testAdvisorConfigEnableAppendsBlockWhenAbsent() throws {
