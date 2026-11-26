@@ -143,6 +143,54 @@ func TestLiveAgentFamilyDetachedProcess(t *testing.T) {
 	}
 }
 
+func TestDetachedAuthorizationUsesEnabledAgentDefinitions(t *testing.T) {
+	t0 := time.Unix(1_800_000_000, 0)
+	procs := fakeProcs{
+		1:   {PID: 1, Exe: "/sbin/init", StartTime: t0.Add(-time.Hour)},
+		100: {PID: 100, PPID: 1, PGID: 100, Exe: "/bin/model-server", StartTime: t0},
+		200: {PID: 200, PPID: 1, PGID: 200, Exe: "/bin/harness", StartTime: t0},
+		300: {PID: 300, PPID: 1, PGID: 250, Exe: "/bin/maintenance", StartTime: t0.Add(time.Second)},
+	}
+	infra := config.AgentDef{Name: "model-server", Kind: config.AgentKindInfra, Match: []string{"/bin/model-server"}}
+	agent := config.AgentDef{Name: "harness", Match: []string{"/bin/harness"}}
+	tg := New(config.Config{Agents: []config.AgentDef{infra}}, procs)
+	tg.Refresh()
+
+	check := func(stage string, wantKnown bool) {
+		t.Helper()
+		if isAgent, known := tg.LiveAgentFamily(300); isAgent || known != wantKnown {
+			t.Errorf("%s: maintenance job = (%v, %v), want (false, %v)", stage, isAgent, known, wantKnown)
+		}
+	}
+	check("infrastructure only", true)
+	if isAgent, known := tg.LiveAgentFamily(100); !isAgent || !known {
+		t.Errorf("matched infrastructure = (%v, %v), want (true, true)", isAgent, known)
+	}
+	tg.SetAgents([]config.AgentDef{infra, agent})
+	delete(procs, 200)
+	tg.SetAgents([]config.AgentDef{agent})
+	check("agent still enabled after it exits", false)
+	tg.SetAgents([]config.AgentDef{infra})
+	check("agent disabled", true)
+	tg.SetAgents([]config.AgentDef{infra, agent})
+	check("agent reenabled without a fresh observation", true)
+}
+
+func TestDetachedAuthorizationRecordsLiveOnlyMatch(t *testing.T) {
+	procs := lineageProcs()
+	job := procs[900]
+	job.PGID = 700
+	procs[900] = job
+	tg := New(lineageConfig(), procs)
+	if agent, known := tg.LiveAgentFamily(500); !agent || !known {
+		t.Fatalf("live root = (%v, %v), want (true, true)", agent, known)
+	}
+	delete(procs, 500)
+	if agent, known := tg.LiveAgentFamily(900); agent || known {
+		t.Errorf("detached job after a live root observation = (%v, %v), want (false, false)", agent, known)
+	}
+}
+
 func TestParentPID(t *testing.T) {
 	fake := fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex"},

@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -64,10 +65,13 @@ type Tagger struct {
 	// lineage holds the agent family each process joined by fork or exec,
 	// as Endpoint Security reported it; it outlives the parents that exited.
 	lineage map[int32]lineageRecord
-	// firstRootStart is the earliest start of a family root a match named
-	// since New; it never moves later, even after that family exits.
-	firstRootStart time.Time
-	now            func() time.Time
+	// rootMu protects firstAgentStarts when authorization holds only a read
+	// lock on mu. Always acquire mu before rootMu.
+	rootMu sync.Mutex
+	// firstAgentStarts retains each enabled coding agent's earliest observed
+	// family start, including after its processes exit.
+	firstAgentStarts map[string]time.Time
+	now              func() time.Time
 	// onTagged is told, after Refresh releases mu, about each pid that
 	// Refresh tagged which was not tagged before the call.
 	onTagged func(pid int32, info AgentInfo)
@@ -75,14 +79,15 @@ type Tagger struct {
 
 func New(cfg config.Config, ps ProcSource) *Tagger {
 	return &Tagger{
-		cfg:     cfg,
-		ps:      ps,
-		table:   make(map[int32]ProcInfo),
-		cache:   make(map[int32]AgentInfo),
-		tagged:  make(map[int32]bool),
-		idents:  make(map[int32]procIdent),
-		lineage: make(map[int32]lineageRecord),
-		now:     time.Now,
+		cfg:              cfg,
+		ps:               ps,
+		table:            make(map[int32]ProcInfo),
+		cache:            make(map[int32]AgentInfo),
+		tagged:           make(map[int32]bool),
+		idents:           make(map[int32]procIdent),
+		lineage:          make(map[int32]lineageRecord),
+		firstAgentStarts: make(map[string]time.Time),
+		now:              time.Now,
 	}
 }
 
@@ -166,6 +171,15 @@ func (t *Tagger) SetAgents(defs []config.AgentDef) {
 	}
 	t.cfg.Agents = defs
 	t.retainLineageLocked(defs)
+	t.rootMu.Lock()
+	for name := range t.firstAgentStarts {
+		if !slices.ContainsFunc(defs, func(d config.AgentDef) bool {
+			return d.Name == name && d.Kind != config.AgentKindInfra
+		}) {
+			delete(t.firstAgentStarts, name)
+		}
+	}
+	t.rootMu.Unlock()
 	clear(t.cache)
 	clear(t.tagged)
 	newly := t.applyLocked(s)
@@ -365,8 +379,7 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 // LiveAgentFamily checks whether pid should be treated as an agent for API
 // authorization. A tracked agent stays restricted. Confirming a non-agent
 // requires a complete live walk, independent of cached telemetry misses.
-// A walk through a launchd-parented process that does not lead its process
-// group and started no earlier than the first matched family root is not known.
+// An adopted group member with possible agent ancestry is treated as unknown.
 func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -381,11 +394,13 @@ func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 		if !ok {
 			return false, false
 		}
-		if _, matched := t.matchLocked(p); matched {
+		if def, matched := t.matchLocked(p); matched {
+			t.noteAgentStartLocked(def.Name, def.Kind, p.StartTime)
 			return true, true
 		}
 		// A live ancestor's recorded family still applies after adoption.
 		if r, held := t.lineage[pid]; held && r.of(p.StartTime) {
+			t.noteAgentStartLocked(r.name, r.kind, r.rootStart)
 			return true, true
 		}
 		// An executable can be readable even when the process metadata
@@ -396,14 +411,34 @@ func (t *Tagger) LiveAgentFamily(pid int32) (isAgent, known bool) {
 		if p.PPID == 0 {
 			return false, true
 		}
-		// Adopted by launchd, not its group's leader, started since the first family root.
-		if p.PPID == 1 && p.PGID != 0 && p.PGID != p.PID &&
-			!t.firstRootStart.IsZero() && !p.StartTime.Before(t.firstRootStart) {
+		if p.PPID == 1 && p.PGID != 0 && p.PGID != p.PID && t.couldFollowAgentStartLocked(p.StartTime) {
 			return false, false
 		}
 		pid = p.PPID
 	}
 	return false, false
+}
+
+func (t *Tagger) noteAgentStartLocked(name, kind string, start time.Time) {
+	if kind == config.AgentKindInfra || start.IsZero() {
+		return
+	}
+	t.rootMu.Lock()
+	defer t.rootMu.Unlock()
+	if first := t.firstAgentStarts[name]; first.IsZero() || start.Before(first) {
+		t.firstAgentStarts[name] = start
+	}
+}
+
+func (t *Tagger) couldFollowAgentStartLocked(start time.Time) bool {
+	t.rootMu.Lock()
+	defer t.rootMu.Unlock()
+	for _, first := range t.firstAgentStarts {
+		if !start.Before(first) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParentPID returns pid's parent from the last process table, falling back to
@@ -536,9 +571,7 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 				rootStart: t.table[root].StartTime,
 				sampledAt: t.now(),
 			}
-			if s := res.rootStart; !s.IsZero() && (t.firstRootStart.IsZero() || s.Before(t.firstRootStart)) {
-				t.firstRootStart = s
-			}
+			t.noteAgentStartLocked(res.Name, res.Kind, res.rootStart)
 			t.cache[pid] = res
 			t.tagged[pid] = true
 			return res, true
@@ -551,6 +584,7 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	// family it joined before its family ancestors exited.
 	if selfOK {
 		if res, ok := t.lineageTagLocked(pid, self); ok {
+			t.noteAgentStartLocked(res.Name, res.Kind, res.rootStart)
 			t.cache[pid] = res
 			t.tagged[pid] = true
 			return res, true

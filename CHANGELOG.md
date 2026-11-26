@@ -26,7 +26,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Agent attribution: a process started inside an agent family keeps that family after its parent exits, for sessions, findings and the control-socket role; the Endpoint Security collector also subscribes to fork records.
 - Worktrees: the daemon scans only on a rescan request or when no scan is saved; the console reads the report when the view opens and on Reload or Rescan instead of on a timer, and a removal answers in its own request.
 - Console: the sidebar toggle is centered on the page title.
-- Control API and console: a process whose parent exited, started after an agent family and not leading its process group, no longer counts as the owner on routes closed to agents.
+- Control API and console: the detached-process fallback uses observations of currently enabled coding agents. A process with unresolved ancestry can lose owner access when it started at or after an observed coding agent's family began.
 
 ## [1.7.0] - 2026-11-21
 

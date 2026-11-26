@@ -120,6 +120,7 @@ func (t *Tagger) NoteLineage(l Lineage) {
 		t.makeRoomLocked()
 	}
 	t.lineage[l.ChildPID] = fam
+	t.noteAgentStartLocked(fam.name, fam.kind, fam.rootStart)
 	if info, cached := t.cache[l.ChildPID]; cached && (!t.tagged[l.ChildPID] ||
 		(fam.of(info.StartedAt) && (info.fromLineage || (matched && info.Name != fam.name)))) {
 		delete(t.cache, l.ChildPID)
