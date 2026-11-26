@@ -158,8 +158,6 @@ python3 packaging/test/setup_session_live.py --with-claude
 
 The runner uses the existing `CLAUDE_CONFIG_DIR` or `~/.claude` for authentication; `--claude-config-dir` can select another existing profile. It checks authentication before launching a model. Personal user settings are excluded from the test session, which explicitly loads production hooks installed in a disposable HOME. Only the current session's transcript is exposed to the collector. The extended check requires real allowed and denied Read results, distinct concurrent session identities, rendered console evidence, and CLI exports in JSON and Markdown. The runner does not rewrite authentication, user settings or installed hooks. Claude can retain its normal authentication metadata and the synthetic session record. Native permissions remain in effect, and Codex remains observation-only.
 
-`python3 packaging/test/test_setup_session_live.py` checks runner authentication, failure and cleanup handling without launching a model. These regression tests also run in `make test` and CI.
-
 ### Native local-model browser acceptance
 
 On Apple Silicon macOS, the opt-in test below uses cached MLX weights, an

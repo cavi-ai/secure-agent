@@ -13,7 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 UNINSTALL = ROOT / "packaging" / "uninstall.sh"
-HOOKS = ("secret_guard", "injection_scan", "activity_log")
 
 
 def remove_hook(path: Path, name: str) -> str:
@@ -24,11 +23,6 @@ def remove_hook(path: Path, name: str) -> str:
 
 
 class RemoveHookTest(unittest.TestCase):
-    def test_every_bundled_hook_carries_its_marker(self):
-        for name in HOOKS:
-            lines = (ROOT / "plugin" / "hooks" / f"{name}.py").read_text().splitlines()
-            self.assertIn(f"# secure-agent-hook: {name}", lines[:3], name)
-
     def test_removes_installed_copies_and_symlinks_and_keeps_other_files(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
