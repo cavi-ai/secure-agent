@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestStopCommandProcess(t *testing.T) {
@@ -53,6 +55,23 @@ func TestStopCommandValidatesArgumentsBeforeConfig(t *testing.T) {
 				t.Fatalf("stop %q: want usage and exit %d, got %v: %s", tc.args, tc.code, err, out)
 			}
 		})
+	}
+}
+
+func TestStopDefaultsMatchDaemonDefaults(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "daemon", "internal", "config", "defaults.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		DBPath     string `yaml:"db_path"`
+		SocketPath string `yaml:"socket_path"`
+	}
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.DBPath != defaultDBPath || d.SocketPath != defaultSocketPath {
+		t.Fatalf("daemon defaults db_path=%q socket_path=%q; stop resolves %q and %q", d.DBPath, d.SocketPath, defaultDBPath, defaultSocketPath)
 	}
 }
 
