@@ -9,7 +9,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,33 +107,45 @@ func Assess(ctx context.Context, endpoints []string) (Report, error) {
 	return report, nil
 }
 
+// endpointPathRE matches a path of non-empty segments without control
+// characters or backslashes.
+var endpointPathRE = regexp.MustCompile(`^(/[^/\x00-\x1f\x7f\\]+)*$`)
+
+// endpointURL validates a loopback base URL and returns it rebuilt from the
+// checked scheme, host, numeric port and path. It preserves the spelling of
+// IP literals because the server may compare the HTTP Host text.
 func endpointURL(endpoint string) (*url.URL, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || len(endpoint) > 2048 || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
 		(u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.Opaque != "" {
 		return nil, errors.New("endpoint must be a loopback HTTP base URL without credentials, query or fragment")
 	}
-	host := strings.ToLower(u.Hostname())
-	ip := net.ParseIP(host)
-	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	scheme := "http"
+	if u.Scheme == "https" {
+		scheme = "https"
+	}
+	host := u.Hostname()
+	if strings.ToLower(host) == "localhost" {
+		host = "localhost"
+	} else if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return nil, errors.New("endpoint must use localhost or a literal loopback address")
 	}
-	port := u.Port()
-	if port != "" {
+	hostPort := host
+	if strings.Contains(host, ":") {
+		hostPort = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
 			return nil, errors.New("endpoint port must be between 1 and 65535")
 		}
-		u.Host = net.JoinHostPort(host, strconv.Itoa(n))
-	} else {
-		u.Host = host
-		if strings.Contains(host, ":") {
-			u.Host = "[" + host + "]"
-		}
+		hostPort = net.JoinHostPort(host, strconv.Itoa(n))
 	}
-	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawPath = ""
-	return u, nil
+	base := strings.TrimSuffix(u.Path, "/")
+	if !endpointPathRE.MatchString(base) || (base != "" && path.Clean(base) != base) {
+		return nil, errors.New("endpoint path must not contain empty or dot segments, control characters or backslashes")
+	}
+	return &url.URL{Scheme: scheme, Host: hostPort, Path: base}, nil
 }
 
 // No DNS lookup or environment proxy may move a probe off this machine.
@@ -158,7 +173,14 @@ func dialLoopback(ctx context.Context, network, address string) (net.Conn, error
 }
 
 func assess(ctx context.Context, client *http.Client, endpoint *url.URL) Assessment {
-	a := Assessment{Endpoint: endpoint.String(), CrossOrigin: Probe{State: "not_checked"}, ForeignHost: Probe{State: "not_checked"}, Findings: []string{}, Enforcement: "not_assessed"}
+	display := *endpoint
+	if ip, err := netip.ParseAddr(endpoint.Hostname()); err == nil && ip.Is6() {
+		display.Host = "[" + ip.String() + "]"
+		if port := endpoint.Port(); port != "" {
+			display.Host = net.JoinHostPort(ip.String(), port)
+		}
+	}
+	a := Assessment{Endpoint: display.String(), CrossOrigin: Probe{State: "not_checked"}, ForeignHost: Probe{State: "not_checked"}, Findings: []string{}, Enforcement: "not_assessed"}
 	u := *endpoint
 	if strings.HasSuffix(u.Path, "/v1") {
 		u.Path += "/models"
