@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -273,5 +274,64 @@ func TestPreviousRunBootTimeIsBeforeNow(t *testing.T) {
 	}
 	if !boot.After(time.Unix(0, 0)) || !boot.Before(time.Now()) {
 		t.Fatalf("bootTime = %v, want between the epoch and now", boot)
+	}
+}
+
+// rewriteRecordEnding replaces the ending in the run record file.
+func rewriteRecordEnding(t *testing.T, path string, ending RunEnding) {
+	t.Helper()
+	state, found, err := readRunState(path)
+	if err != nil || !found {
+		t.Fatalf("run record: found=%v err=%v", found, err)
+	}
+	state.Ending = ending
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreviousRunRewrittenToOwnerStopRaisesFinding(t *testing.T) {
+	st, path := openRunStore(t)
+	clock := &runClock{t: testBoot.Add(time.Hour)}
+	run, err := StartRun(path, 4242, clock.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordRunStart(st, run)
+	clock.t = clock.t.Add(time.Hour)
+	if ending, err := run.Stop(RunEndingSignal); err != nil || ending != RunEndingSignal {
+		t.Fatalf("Stop = %s, %v; want %s", ending, err, RunEndingSignal)
+	}
+	rewriteRecordEnding(t, path, RunEndingOwnerStop)
+
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+
+	requireOneFinding(t, st, "pid 4242", "owner stop with no stored stop intent")
+}
+
+func TestPreviousRunOwnerStopWithStoredIntentRaisesNothing(t *testing.T) {
+	st, path := openRunStore(t)
+	clock := &runClock{t: testBoot.Add(time.Hour)}
+	run, err := StartRun(path, 4242, clock.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordRunStart(st, run)
+	if _, _, err := recordStopIntent(st, run); err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(time.Second)
+	if ending, err := run.Stop(RunEndingSignal); err != nil || ending != RunEndingOwnerStop {
+		t.Fatalf("Stop = %s, %v; want %s", ending, err, RunEndingOwnerStop)
+	}
+
+	raisePreviousRunFindings(st, startNext(t, path, clock), bootAt(testBoot), clock.now)
+
+	if flags := monitorStoppedFlags(t, st); len(flags) != 0 {
+		t.Fatalf("confirmed owner stop stored findings: %+v", flags)
 	}
 }

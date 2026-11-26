@@ -129,6 +129,8 @@ type Correlator struct {
 	isScopedExpected func([]model.DecisionScope, int32) bool
 	expectedCount    int
 	lastEviction     time.Time
+	// stateDir is the daemon's state directory; empty when the store is in memory.
+	stateDir string
 }
 
 // Hooks are fixed at New. OnUninspected runs with the correlator lock held
@@ -163,6 +165,9 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 		isOpenFlag:         hooks.OpenFlag,
 	}
 	c.restoreOpenReadFlags(hooks.OpenReadFlags)
+	if cfg.DBPath != "" {
+		c.stateDir = filepath.Dir(cfg.DBPath)
+	}
 	return c
 }
 
@@ -360,6 +365,8 @@ var repeatWindows = map[string]time.Duration{
 	// One per client process and host: a monitored session's connections
 	// would otherwise flag each request.
 	"proxy-untrusted-egress-monitored": 60 * time.Minute,
+	// One per process and path: a tool rewriting a file fires on every write.
+	"monitor-state-write": 15 * time.Minute,
 }
 
 // shouldFlag reports whether this (rule, pid, subject) fire is new within
@@ -529,6 +536,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	var flags []model.Flag
 	c.rememberLaunchWriterLocked(e, info.Name)
 	c.rememberTrustWriterLocked(e, info.Name)
+	flags = append(flags, c.stateWriteLocked(e, info.Name)...)
 
 	switch e.Kind {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:

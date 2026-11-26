@@ -202,6 +202,21 @@ var playbooks = []Playbook{
 		},
 		Actions: []string{"dismiss"},
 	},
+	{
+		Rule:  "monitor-state-write",
+		Title: "Agent changed the monitor's state files",
+		Why:   "An agent process wrote, replaced or deleted a file in Secure Agent's state directory other than the activity log and session markers its hooks write. The event store, the run record and the collectors' position files live there: a change can remove findings or alter how a monitor run is recorded.",
+		Now: []string{
+			"Open the session timeline for the process and read the command that touched the file.",
+			"Compare the finding's time with gaps in the event timeline and with monitor-stopped findings.",
+			"Kill the agent if it is still running.",
+		},
+		Prevent: []Step{
+			{"guard-rule", "Deny state directory writes to agents", "Directory Guard refuses agent commands and file tools that write under the state directory."},
+			{"workflow", "Leave the state directory to the daemon", "Read findings through the console or the secure-agent command; never ask an agent to edit the state files."},
+		},
+		Actions: []string{"kill", "open-incident", "dismiss"},
+	},
 }
 
 var generic = Playbook{

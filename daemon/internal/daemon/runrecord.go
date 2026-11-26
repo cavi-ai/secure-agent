@@ -30,6 +30,9 @@ const (
 	RunEndingStartFailure RunEnding = "start-failure"
 	// RunEndingNoRecord is a run whose record has a running marker and no ending.
 	RunEndingNoRecord RunEnding = "no-record"
+	// RunEndingUnconfirmedStop is a record that reports an owner stop for a run
+	// the event store holds no stop intent for.
+	RunEndingUnconfirmedStop RunEnding = "unconfirmed-owner-stop"
 )
 
 // StopIntentWindow is how long a stop intent stays valid: a signal later than
@@ -122,6 +125,9 @@ type RunTracker struct {
 	rec             RunRecord
 	pending         []pendingRun
 	endingPersisted bool
+	// ownerStop is the previous run when its record reports an owner stop;
+	// raisePreviousRunFindings confirms it against the event store.
+	ownerStop *RunRecord
 }
 
 // StartRun writes this run's running marker and carries forward any previous
@@ -142,6 +148,10 @@ func StartRun(path string, pid int, now func() time.Time) (*RunTracker, error) {
 			pending.ObservedAt = t.rec.StartedAt
 		}
 		t.pending = append(t.pending, pending)
+	}
+	if found && state.Ending == RunEndingOwnerStop {
+		rec := state.RunRecord
+		t.ownerStop = &rec
 	}
 	return t, t.write(t.rec)
 }

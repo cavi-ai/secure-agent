@@ -8,8 +8,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Added
 - Daemon: a run record stores how each run started and ended; quitting the app and the new `secure-agent stop` command record an owner stop before the daemon exits.
-- Findings: `monitor-stopped` (severity 3) is raised at start when a previous run since the last boot ended without an owner stop; it names the pid, how the run ended and its times.
+- Findings: `monitor-stopped` (severity 3) is raised at start when a previous run since the last boot ended without an owner stop, or its record reports an owner stop the event store holds no stop intent for; it names the pid, how the run ended and its times.
 - Directory Guard: agent commands that stop Secure Agent are denied: `kill`, `pkill`, `killall` and `xargs kill` on its processes, `osascript` quit, and `launchctl` stop, unload or removal of its services (rule `guard-control-stop`).
+- Findings: `monitor-state-write` (severity 3) is raised when an agent process writes, replaces or deletes a file in the daemon's state directory other than the hook activity log and session markers; it names the process and the path.
 
 ### Changed
 - Fleet collector: the event log rotates per node at 16 MiB and keeps 8 rotated files; event queries read the newest entries first and cap `limit` at 1000.

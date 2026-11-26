@@ -230,6 +230,7 @@ func (s *buildState) openStore() error {
 	}
 	c.store = st
 	raisePreviousRunFindings(st, c.run, bootTime, time.Now)
+	recordRunStart(st, c.run)
 	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
 	s.st = st
 	return nil
@@ -568,7 +569,7 @@ func (s *buildState) buildAPI() {
 		Store:      st,
 		Killer:     &realKiller{},
 		Status:     statusFn,
-		StopIntent: c.run.RecordStopIntent,
+		StopIntent: func() (time.Time, time.Time, error) { return recordStopIntent(st, c.run) },
 		Firewall: api.FirewallControl{
 			Engine:      fw.Engine,
 			Modes:       fw.Modes,
