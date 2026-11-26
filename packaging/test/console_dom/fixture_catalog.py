@@ -855,6 +855,7 @@ FIXTURES = {
         query='?tab=agent',
         scenarios=('tab', 'tab=agent'),
         payload=lambda: payload_cases.disabled_agent(),
+        script='cases_agent_off.js',
         served=True,
     ),
     'dom_agentchat': Fixture(

@@ -3595,6 +3595,11 @@
   if (scenarios.has('remodelusage')) setTimeout(() => {
     const checks = {};
     const day = document.querySelector('[data-action="select-spend-day"]');
+    const chart = day?.closest('[role="group"]');
+    const descriptionId = chart?.getAttribute('aria-describedby');
+    const description = descriptionId && document.getElementById(descriptionId);
+    checks.keyboardGuidance = !!description?.getClientRects().length
+      && description.textContent.includes('←/→') && description.textContent.includes('Home/End');
     day?.focus(); day?.click();
     setTimeout(() => {
       const report = window.SA.t.spendDayReport;

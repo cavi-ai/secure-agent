@@ -195,6 +195,8 @@ def run_agent(page):
             and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1
         ),
     )
+    copied = html.unescape(pre(dom_agentoff, 'agent-config-copied'))
+    check('agent: off, Copy writes the enablement YAML', copied == 'system_agent:\n  enabled: true', repr(copied))
     for label, progress_dom, expected, animation in [('delivery', dom_agentlatency, 'Sending your message', 'spin'), ('Ollama wait', dom_agentthinking, 'Waiting for local Ollama', 'spin'), ('reduced motion', dom_agentreduced, 'Waiting for local Ollama', 'none')]:
         receipt = re.search('data-agent-feedback-state="([^"]+)"', progress_dom)
         state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
