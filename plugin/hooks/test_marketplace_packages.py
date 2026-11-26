@@ -49,12 +49,22 @@ class MarketplacePackagesTest(unittest.TestCase):
                             self.assertIs(manifest.get("activation", {}).get("onStartup"), True)
                     elif host == "claude":
                         source = ROOT / "plugin/.claude-plugin/plugin.json"
-                        self.assertEqual(
-                            (out / ".claude-plugin/plugin.json").read_bytes(), source.read_bytes()
-                        )
-                        self.assertEqual(
-                            (out / "hooks/hooks.json").read_bytes(), (HOOKS / "hooks.json").read_bytes()
-                        )
+                        manifest = (out / ".claude-plugin/plugin.json").read_bytes()
+                        self.assertEqual(manifest, source.read_bytes())
+                        # Claude loads hooks/hooks.json by convention.
+                        self.assertNotIn("hooks", json.loads(manifest))
+                        hooks = (out / "hooks/hooks.json").read_bytes()
+                        self.assertEqual(hooks, (HOOKS / "hooks.json").read_bytes())
+                        event_hooks = [{
+                            "matcher": "*",
+                            "hooks": [{
+                                "type": "command",
+                                "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/secret_guard.py"',
+                            }],
+                        }]
+                        self.assertEqual(json.loads(hooks), {
+                            "hooks": {event: event_hooks for event in ("PreToolUse", "PostToolUse")},
+                        })
                     elif host in ("codex", "cursor"):
                         manifest = json.loads((out / f".{host}-plugin/plugin.json").read_text())
                         self.assertEqual(manifest["name"], "secure-agent")
