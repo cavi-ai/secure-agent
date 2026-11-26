@@ -110,9 +110,7 @@ type API struct {
 	fwSources     *firewall.SourceStore
 	fwBaseSources []string
 
-	guardBroker   *guard.Broker
-	guardIdentity func(int32, string) (model.DecisionScope, bool)
-	guardRepeats  guardRepeats
+	guardHandlers
 
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore
@@ -122,13 +120,10 @@ type API struct {
 	notifyScopes *correlate.NotifyScopeStore
 	retriage     *RetriageFuncs
 	hostAssess   *HostAssessFuncs
-	guardAdvisor func(model.GuardAssessmentRequest)
-	guardSeq     uint64
 
-	peerRole   *peers
-	peerChk    PeerChecker
-	agentPIDs  func() map[int32]struct{}
-	fleetSinks GuardEventSink
+	peerRole  *peers
+	peerChk   PeerChecker
+	agentPIDs func() map[int32]struct{}
 	// fleetConfigured tells the console whether a collector webhook can
 	// deliver at all; nil means none.
 	fleetConfigured func() bool
@@ -369,9 +364,7 @@ func New(d Deps) *API {
 		fwIngest:        d.Firewall.Ingest,
 		fwSources:       d.Firewall.Sources,
 		fwBaseSources:   d.Firewall.BaseSources,
-		guardBroker:     d.Guard.Broker,
 		shellReviews:    d.Guard.ShellReviews,
-		guardIdentity:   d.Guard.Identity,
 		correlator:      d.Policy.Correlator,
 		allowlist:       d.Policy.Allowlist,
 		mutes:           d.Policy.Mutes,
@@ -380,9 +373,7 @@ func New(d Deps) *API {
 		notifyScopes:    d.Policy.NotifyScopes,
 		retriage:        d.Advisors.Retriage,
 		hostAssess:      d.Advisors.HostAssess,
-		guardAdvisor:    d.Guard.Advisor,
 		agentPIDs:       d.Peers.AgentPIDs,
-		fleetSinks:      d.Telemetry.FleetSink,
 		fleetConfigured: d.Telemetry.FleetConfigured,
 		busDrops:        d.Telemetry.BusDrops,
 		busDropAt:       d.Telemetry.BusDropAt,
@@ -398,6 +389,14 @@ func New(d Deps) *API {
 		openPath:        d.System.OpenPath,
 		stopIntent:      d.StopIntent,
 	}
+	a.guardHandlers.guardBroker = d.Guard.Broker
+	a.guardHandlers.guardIdentity = d.Guard.Identity
+	a.guardHandlers.guardAdvisor = d.Guard.Advisor
+	a.guardHandlers.store = d.Store
+	a.guardHandlers.fleetSinks = d.Telemetry.FleetSink
+	a.guardHandlers.emitEvent = a.publishGuardEvent
+	a.guardHandlers.saveLabel = a.recordLabel
+	a.guardHandlers.replyProbe = a.answerCoverageProbe
 	if a.tcpClientPID == nil {
 		a.tcpClientPID = TCPClientPID
 	}
@@ -405,6 +404,7 @@ func New(d Deps) *API {
 		a.openPath = openWithSystem
 	}
 	a.peerChk = d.Peers.Checker
+	a.guardHandlers.peerChk = d.Peers.Checker
 	if d.Peers.Checker != nil {
 		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.Peers.UIPID, UIPIDVersion: d.Peers.UIPIDVersion, AgentPIDs: d.Peers.AgentPIDs}
 	}

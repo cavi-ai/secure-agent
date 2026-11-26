@@ -125,11 +125,29 @@ func promptDetail(s string) string {
 	return s
 }
 
+// guardHandlers serves the guard routes and the guard decision path, and holds
+// only what those handlers use.
+type guardHandlers struct {
+	guardBroker   *guard.Broker
+	guardIdentity func(int32, string) (model.DecisionScope, bool)
+	guardAdvisor  func(model.GuardAssessmentRequest)
+	guardSeq      uint64
+	guardRepeats  guardRepeats
+
+	store      *store.Store
+	peerChk    PeerChecker
+	fleetSinks GuardEventSink
+
+	emitEvent  func(event.Kind, string)
+	saveLabel  func(model.OperatorLabel)
+	replyProbe func(http.ResponseWriter, guardDecisionRequest)
+}
+
 // handleGuardDecision answers a hook's prompt-mode query: a cached (agent,rule)
 // decision is returned instantly; otherwise it enqueues a pending prompt and
 // blocks until the menubar resolves it, the broker times out (deny), or the
 // hook disconnects (prompt withdrawn, deny).
-func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
+func (g *guardHandlers) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -146,20 +164,20 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ProbeID != "" {
-		a.answerCoverageProbe(w, req)
+		g.replyProbe(w, req)
 		return
 	}
-	if a.guardBroker == nil {
+	if g.guardBroker == nil {
 		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
 		return
 	}
 	peerPID := int32(-1)
-	if a.peerChk != nil {
-		if cred, err := a.peerChk.PeerCred(connOf(r)); err == nil {
+	if g.peerChk != nil {
+		if cred, err := g.peerChk.PeerCred(connOf(r)); err == nil {
 			peerPID = cred.PID
 		}
 	}
-	d, err := a.decideGuard(r.Context(), req, peerPID)
+	d, err := g.decideGuard(r.Context(), req, peerPID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -170,14 +188,14 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 // ProxyEgressDecision asks the guard about one proxied connection to host from
 // pid (0 when unattributed) in sessionID, as the hook asks about a network
 // send; "session" mode asks once per session for the kind.
-func (a *API) ProxyEgressDecision(ctx context.Context, pid int32, sessionID, host, detail, mode string) guard.Decision {
+func (g *guardHandlers) ProxyEgressDecision(ctx context.Context, pid int32, sessionID, host, detail, mode string) guard.Decision {
 	refused := guard.Decision{Verdict: "deny", Scope: "once", Reason: "unavailable"}
-	if a.guardBroker == nil {
+	if g.guardBroker == nil {
 		return refused
 	}
 	agent := "proxy"
-	if pid > 0 && a.guardIdentity != nil {
-		if g, ok := a.guardIdentity(pid, sessionID); ok && guardTokenRE.MatchString(g.Agent) {
+	if pid > 0 && g.guardIdentity != nil {
+		if g, ok := g.guardIdentity(pid, sessionID); ok && guardTokenRE.MatchString(g.Agent) {
 			agent = g.Agent
 		}
 	}
@@ -189,7 +207,7 @@ func (a *API) ProxyEgressDecision(ctx context.Context, pid int32, sessionID, hos
 	if pid <= 0 {
 		pid = -1
 	}
-	d, err := a.decideGuard(ctx, req, pid)
+	d, err := g.decideGuard(ctx, req, pid)
 	if err != nil {
 		return refused
 	}
@@ -202,13 +220,13 @@ var errSessionUnavailable = fmt.Errorf("session data unavailable")
 // decideGuard answers one guard query from peerPID (-1 when unknown): a saved
 // permission or rule answers at once, otherwise the request is prompted and
 // blocks until answered, timed out (deny) or withdrawn with ctx (deny).
-func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID int32) (guard.Decision, error) {
-	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
+func (g *guardHandlers) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID int32) (guard.Decision, error) {
+	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&g.guardSeq, 1))
 	var identity model.DecisionScope
 	pid := peerPID
 	peerPID = 0
-	if pid > 0 && a.guardIdentity != nil {
-		if got, ok := a.guardIdentity(pid, req.SessionID); ok && got.Agent == req.Agent {
+	if pid > 0 && g.guardIdentity != nil {
+		if got, ok := g.guardIdentity(pid, req.SessionID); ok && got.Agent == req.Agent {
 			identity = got
 			peerPID = pid
 			req.SessionID = identity.SessionID
@@ -217,7 +235,7 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 	// A supplied identity is only attributable if the durable session exists.
 	// Never guess from the agent, workspace, or request time.
 	if req.SessionID != "" {
-		_, ok, err := a.store.GetSessionBounded(req.SessionID)
+		_, ok, err := g.store.GetSessionBounded(req.SessionID)
 		if err != nil {
 			return guard.Decision{}, errSessionUnavailable
 		}
@@ -226,7 +244,7 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 		}
 	}
 	record := func(d guard.Decision) {
-		a.store.PutGuardDecision(store.GuardDecision{
+		g.store.PutGuardDecision(store.GuardDecision{
 			ID: id, SessionID: req.SessionID, RuleID: req.RuleID,
 			Verdict: d.Verdict, Scope: d.Scope, At: time.Now().UTC().Format(time.RFC3339Nano),
 			ResolutionID: d.ResolutionID, ScopeIDs: d.ScopeIDs, Reason: d.Reason,
@@ -235,21 +253,21 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 	identity.RuleID = req.RuleID
 	identity.ResourcePath = req.Path
 	identity.Operation = "guard:" + req.Tool
-	if d, ok := standingGuardDecision(a.store, identity, req.Categories, req.Agent, req.RuleID, req.Path); ok {
+	if d, ok := standingGuardDecision(g.store, identity, req.Categories, req.Agent, req.RuleID, req.Path); ok {
 		record(d)
 		return d, nil
 	}
 	// Offer the prompt to the advisor for a recommendation the operator sees
 	// while deciding. Advisory only — the broker still blocks for the human.
-	if a.guardAdvisor != nil {
-		a.guardAdvisor(model.GuardAssessmentRequest{
+	if g.guardAdvisor != nil {
+		g.guardAdvisor(model.GuardAssessmentRequest{
 			Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 			Workspace: req.Workspace,
 		})
 	}
 	// Push, not just poll: SSE subscribers (menubar) refetch /guard/pending
 	// immediately instead of waiting out their poll interval.
-	a.publishGuardEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
+	g.emitEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
 	scopes := []model.ScopeChoice{{Kind: "once"}}
 	probe := identity
 	model.ScopeChoice{Kind: "session"}.Apply(&probe, time.Now().UTC())
@@ -269,18 +287,18 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 	for i := range scopes {
 		scopes[i] = guard.Disclose(req.RuleID, req.Categories, scopes[i])
 	}
-	repeats := a.guardRepeats.note(req.SessionID, req.Categories)
+	repeats := g.guardRepeats.note(req.SessionID, req.Categories)
 	var preselect *model.ScopeChoice
 	if len(scopes) > 1 && len(req.Categories) > 0 && (req.CategoryMode == "session" || repeats > 0) {
 		preselect = &model.ScopeChoice{Kind: "session", Category: true}
 	}
 	// Disclose the blast radius of "allow always": the cached rule covers
 	// every path this rule matches for this agent, not just this file.
-	scopeText := a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."
+	scopeText := g.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke under Protection → Rules & permissions."
 	if req.RuleID == model.EgressRule {
 		scopeText = "Once answers this request. Future permissions cover only the sends named here, or, when you choose their kind, every send of that kind, from this tool, workspace and observed executable path; other kinds still ask. Session permission ends with this session; timed permission expires after 24 hours or 7 days; Always lasts until revoked. Executable signatures are not verified. Revoke under Protection → Rules & permissions."
 	}
-	d := a.guardBroker.Request(ctx, guard.Pending{
+	d := g.guardBroker.Request(ctx, guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		Detail:    promptDetail(req.Detail),
 		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
@@ -296,8 +314,8 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 	if d.Scope == "always" && d.Reason == "" {
 		// Only a saved rule is audited. An unsaved one answers this request
 		// once and the failure stays in write health.
-		if err := a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"}); err == nil {
-			a.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})
+		if err := g.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"}); err == nil {
+			g.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})
 		} else {
 			d.Scope = "once"
 		}
@@ -306,8 +324,8 @@ func (a *API) decideGuard(ctx context.Context, req guardDecisionRequest, peerPID
 	// Downstream fleet delivery: every resolved decision (cached, prompt, or
 	// timeout-deny) is observable. Payload carries no secret material — paths
 	// and rule ids only, mirroring what the console already shows.
-	if a.fleetSinks != nil {
-		a.fleetSinks.PublishGuardDecision(map[string]any{
+	if g.fleetSinks != nil {
+		g.fleetSinks.PublishGuardDecision(map[string]any{
 			"agent": req.Agent, "tool": req.Tool, "path": req.Path,
 			"rule_id": req.RuleID, "verdict": d.Verdict, "scope": d.Scope,
 			"reason": d.Reason, "ts": time.Now().UTC().Format(time.RFC3339Nano),
@@ -324,19 +342,19 @@ func offeredScope(scopes []model.ScopeChoice, choice model.ScopeChoice) bool {
 	})
 }
 
-func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
+func (g *guardHandlers) handleGuardPending(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.guardBroker == nil {
+	if g.guardBroker == nil {
 		writeJSON(w, []guard.Pending{})
 		return
 	}
-	pending := a.guardBroker.Pending()
-	if a.store != nil {
+	pending := g.guardBroker.Pending()
+	if g.store != nil {
 		// Advisory only: the human still resolves the prompt.
-		attachGuardAdvice(a.store, pending)
+		attachGuardAdvice(g.store, pending)
 	}
 	// Keep the API response oldest-first by timestamp.
 	sort.Slice(pending, func(i, j int) bool { return pending[i].TS < pending[j].TS })
@@ -372,12 +390,12 @@ type GuardResolveResponse struct {
 	Receipt  *GuardResolveReceipt `json:"receipt,omitempty"`
 }
 
-func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
+func (g *guardHandlers) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.guardBroker == nil {
+	if g.guardBroker == nil {
 		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -396,7 +414,7 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var pend *guard.Pending
-	for _, p := range a.guardBroker.Pending() {
+	for _, p := range g.guardBroker.Pending() {
 		if p.ID == req.ID {
 			pend = &p
 			break
@@ -427,32 +445,32 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if scoped {
 		prepare = func(ctx context.Context, p guard.Pending) (func() error, func(), error) {
-			if a.guardIdentity == nil || p.PeerPID <= 0 {
+			if g.guardIdentity == nil || p.PeerPID <= 0 {
 				return nil, nil, fmt.Errorf("identity unavailable; choose once")
 			}
 			// Disclosure text is not part of which permission was offered.
 			if !offeredScope(p.AvailableScopes, choice) {
 				return nil, nil, fmt.Errorf("this request does not offer that permission")
 			}
-			g, valid := a.guardIdentity(p.PeerPID, p.SessionID)
-			if !valid || g.Agent != p.Agent || g.Workspace != p.Workspace || g.ReaderExe != p.ReaderExe {
+			got, valid := g.guardIdentity(p.PeerPID, p.SessionID)
+			if !valid || got.Agent != p.Agent || got.Workspace != p.Workspace || got.ReaderExe != p.ReaderExe {
 				return nil, nil, fmt.Errorf("identity changed; choose once")
 			}
-			g.RuleID = p.RuleID
-			g.ResourcePath = p.Path
-			g.Operation = "guard:" + p.Tool
-			choice.Apply(&g, time.Now().UTC())
-			grants := []model.DecisionScope{g}
+			got.RuleID = p.RuleID
+			got.ResourcePath = p.Path
+			got.Operation = "guard:" + p.Tool
+			choice.Apply(&got, time.Now().UTC())
+			grants := []model.DecisionScope{got}
 			if req.Category {
 				if len(p.Categories) == 0 || len(p.Categories) != len(decision.ScopeIDs) {
 					return nil, nil, fmt.Errorf("this request names no send kind; choose this send")
 				}
-				grants = categoryScopes(g, p.Categories)
+				grants = categoryScopes(got, p.Categories)
 			}
 			for i := range grants {
 				grants[i].ID = grantID(i)
 			}
-			return a.store.PrepareDecisionScopes(ctx, grants)
+			return g.store.PrepareDecisionScopes(ctx, grants)
 		}
 	}
 	if req.Scope == "always" && req.Verdict == "allow" {
@@ -465,19 +483,19 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 			return nil, nil, nil
 		}
 	}
-	ok, err := a.guardBroker.ResolveWith(req.ID, decision, prepare)
+	ok, err := g.guardBroker.ResolveWith(req.ID, decision, prepare)
 	if err != nil {
 		http.Error(w, "Permission could not be saved. Refresh requests before trying again. "+err.Error(), 503)
 		return
 	}
 	if ok {
-		a.publishGuardEvent(event.KindGuardResolved, req.Verdict+"/"+req.Scope)
+		g.emitEvent(event.KindGuardResolved, req.Verdict+"/"+req.Scope)
 		if pend != nil {
 			label := "ok"
 			if req.Verdict == "deny" {
 				label = "not_ok"
 			}
-			a.recordLabel(model.OperatorLabel{Kind: "guard", Rule: pend.RuleID, Agent: pend.Agent, Pattern: pend.Path,
+			g.saveLabel(model.OperatorLabel{Kind: "guard", Rule: pend.RuleID, Agent: pend.Agent, Pattern: pend.Path,
 				Label: label, Source: "guard-" + req.Verdict})
 		}
 	}
@@ -492,17 +510,17 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 // add (POST {"agent","rule_id","path"}), revoke (DELETE ?agent=&rule_id=&path=).
 // A path allow is narrower than a rule allow: it approves one file (and its
 // descendants) instead of every path the rule matches. Mutations audited.
-func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
+func (g *guardHandlers) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		allows, err := a.store.ListGuardPathAllows(200)
+		allows, err := g.store.ListGuardPathAllows(200)
 		if err != nil {
 			http.Error(w, "File exceptions are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
 			return
 		}
 		writeJSON(w, allows)
 	case http.MethodPost:
-		if a.guardBroker == nil {
+		if g.guardBroker == nil {
 			http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
 			return
 		}
@@ -521,16 +539,16 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "path must be an absolute filesystem path", http.StatusBadRequest)
 			return
 		}
-		if err := a.store.PutGuardPathAllow(store.GuardPathAllow{Agent: req.Agent, RuleID: req.RuleID, Path: req.Path}); err != nil {
+		if err := g.store.PutGuardPathAllow(store.GuardPathAllow{Agent: req.Agent, RuleID: req.RuleID, Path: req.Path}); err != nil {
 			http.Error(w, "could not save the file exception", http.StatusInternalServerError)
 			return
 		}
-		a.recordLabel(model.OperatorLabel{Kind: "file", Rule: req.RuleID, Agent: req.Agent, Pattern: req.Path, Label: "ok", Source: "allow-path"})
-		a.store.PutAudit(store.AuditEntry{
+		g.saveLabel(model.OperatorLabel{Kind: "file", Rule: req.RuleID, Agent: req.Agent, Pattern: req.Path, Label: "ok", Source: "allow-path"})
+		g.store.PutAudit(store.AuditEntry{
 			Action: "guard-path-allow", Rule: req.Agent + "/" + req.RuleID,
 			Detail: "allowed path " + req.Path,
 		})
-		a.publishGuardEvent(event.KindGuardResolved, "path-allow")
+		g.emitEvent(event.KindGuardResolved, "path-allow")
 		writeJSON(w, map[string]any{"status": "ok", "agent": req.Agent, "rule_id": req.RuleID, "path": req.Path})
 	case http.MethodDelete:
 		agent := r.URL.Query().Get("agent")
@@ -541,13 +559,13 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "agent, rule_id and path required", http.StatusBadRequest)
 			return
 		}
-		removed, err := a.store.DeleteGuardPathAllow(agent, ruleID, path)
+		removed, err := g.store.DeleteGuardPathAllow(agent, ruleID, path)
 		if err != nil {
 			http.Error(w, "Could not revoke the file exception. Refresh before trying again.", http.StatusServiceUnavailable)
 			return
 		}
 		if removed {
-			a.store.PutAudit(store.AuditEntry{Action: "guard-path-allow-revoke", Rule: agent + "/" + ruleID, Detail: "revoked path " + path})
+			g.store.PutAudit(store.AuditEntry{Action: "guard-path-allow-revoke", Rule: agent + "/" + ruleID, Detail: "revoked path " + path})
 		}
 		writeJSON(w, map[string]any{"status": "ok", "removed": removed})
 	default:
@@ -556,10 +574,10 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGuardRules lists stored decisions (GET) and revokes one (DELETE ?agent=&rule_id=).
-func (a *API) handleGuardRules(w http.ResponseWriter, r *http.Request) {
+func (g *guardHandlers) handleGuardRules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		rules, err := a.store.ListGuardRules(200)
+		rules, err := g.store.ListGuardRules(200)
 		if err != nil {
 			http.Error(w, "Guard decisions are unavailable. Refresh before changing policy.", http.StatusServiceUnavailable)
 			return
@@ -572,13 +590,13 @@ func (a *API) handleGuardRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "agent and rule_id required, matching ^[A-Za-z0-9_.-]+$", http.StatusBadRequest)
 			return
 		}
-		removed, err := a.store.DeleteGuardRule(agent, ruleID)
+		removed, err := g.store.DeleteGuardRule(agent, ruleID)
 		if err != nil {
 			http.Error(w, "Could not revoke the guard decision. Refresh before trying again.", http.StatusServiceUnavailable)
 			return
 		}
 		if removed {
-			a.store.PutAudit(store.AuditEntry{Action: "guard-rule-revoke", Rule: agent + "/" + ruleID})
+			g.store.PutAudit(store.AuditEntry{Action: "guard-rule-revoke", Rule: agent + "/" + ruleID})
 		}
 		writeJSON(w, map[string]any{"status": "ok", "removed": removed})
 	default:
