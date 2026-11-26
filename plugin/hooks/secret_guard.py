@@ -375,6 +375,28 @@ def is_guard_control_path(token: str) -> bool:
     return p == GUARD_CONTROL_DIR or p.startswith(GUARD_CONTROL_DIR + os.sep)
 
 
+# The daemon's evidence store, the hook activity log and the run record.
+# Agents may read here; writes are denied.
+GUARD_STATE_DIR = os.path.join(HOME, ".local", "state", "secure-agent")
+# The state directory named inside a larger token: SQL text, a file: URI, inline code.
+GUARD_STATE_REF_RE = re.compile(r"/\.local/state/secure-agent(?![\w-])", re.I)
+
+
+def is_guard_state_path(token: str) -> bool:
+    p = norm(token).lower()
+    d = GUARD_STATE_DIR.lower()
+    return p == d or p.startswith(d + os.sep)
+
+
+def command_state_path(command: str) -> str | None:
+    """First token anywhere in the full command line that is a state path."""
+    try:
+        tokens = shlex.split(command, comments=True)
+    except ValueError:
+        tokens = command.split()
+    return next((tok for tok in tokens if is_guard_state_path(tok)), None)
+
+
 # The harnesses' own enforcement plane: their hook configs and the hook
 # scripts themselves. Editing these is how an agent removes or neuters the
 # guard watching it — the self-removal bypass called out in the threat model.
@@ -2260,6 +2282,68 @@ def rule_protected_mutation(seg: SegmentContext) -> Verdict | None:
                 )
 
 
+# Agent reply for every write denied under the state directory.
+STATE_DENY_REPLY = (
+    "DENIED: the evidence store, hook activity log and run record under "
+    "~/.local/state/secure-agent/ are not agent-writable. Reads stay allowed; "
+    "ask the user to make the change."
+)
+# sqlite3 can write any database it opens, so queries run against a copy.
+STATE_SQLITE_REPLY = (
+    STATE_DENY_REPLY + " To query the store, copy the file elsewhere with `cp` "
+    "and query the copy."
+)
+
+
+def state_denied(tok: str, agent_msg: str = STATE_DENY_REPLY) -> Verdict:
+    path = tok if is_guard_state_path(tok) else GUARD_STATE_DIR
+    return denied("guard-state-mutation", f"Blocked: an agent tried to modify {norm(path)}.", agent_msg)
+
+
+def _state_read_form(name: str, args: list) -> bool:
+    """True for a mutator that only reads its state-path operands: cp with
+    every state path a source, sed without in-place editing, awk without inplace."""
+    if name == "cp":
+        operands = [a for a in args if not a.startswith("-")]
+        target_dir = any(a.startswith("--target-directory")
+                         or (a.startswith("-") and not a.startswith("--") and "t" in a[1:])
+                         for a in args)
+        return bool(operands) and not is_guard_state_path(operands[-1]) and not target_dir
+    if name == "sed":
+        return not any(a.startswith("--in-place")
+                       or (a.startswith("-") and not a.startswith("--") and "i" in a[1:])
+                       for a in args)
+    if name == "awk":
+        return not any("inplace" in a for a in args)
+    return False
+
+
+# 3a. Writes under the state directory: mutators, sqlite3 on the store,
+#     find -delete/-exec with a mutator, and xargs feeding a mutator.
+def rule_guard_state_mutation(seg: SegmentContext) -> Verdict | None:
+    argv, name = seg.argv, seg.name
+    args = argv[1:]
+    state = [t for t in args if is_guard_state_path(t)]
+    if name in MUTATORS and state and not _state_read_form(name, args):
+        return state_denied(state[0])
+    if name == "sqlite3":
+        for tok in args:
+            if is_guard_state_path(tok) or GUARD_STATE_REF_RE.search(tok):
+                return state_denied(tok, STATE_SQLITE_REPLY)
+    if name == "find" and state:
+        exec_words = [args[i + 1] for i, a in enumerate(args[:-1])
+                      if a in ("-exec", "-execdir", "-ok")]
+        if "-delete" in args or any(os.path.basename(w) in MUTATORS or os.path.basename(w) == "sqlite3"
+                                    for w in exec_words):
+            return state_denied(state[0])
+    if name == "xargs":
+        subcmds = [t for t in args if not t.startswith("-")]
+        if any(os.path.basename(t) in MUTATORS for t in subcmds):
+            path = command_state_path(seg.command)
+            if path:
+                return state_denied(path)
+
+
 # 4. Redirects into rc files, keychain paths, or the guard's own
 #    control plane, whatever the command is.
 def rule_protected_redirect(seg: SegmentContext) -> Verdict | None:
@@ -2293,6 +2377,13 @@ def rule_protected_redirect(seg: SegmentContext) -> Verdict | None:
                 "DENIED: harness settings and hook scripts are the guard's "
                 "enforcement plane — this is how an agent would disable the "
                 "guard that is watching it.",
+            )
+        # Output redirects into the state directory; reading from it with `<` stays allowed.
+        if ">" in raw[m.start():m.start(1)] and is_guard_state_path(tgt):
+            return denied(
+                "guard-state-redirect",
+                f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                STATE_DENY_REPLY,
             )
 
 
@@ -2328,6 +2419,9 @@ def rule_interpreter_write(seg: SegmentContext) -> Verdict | None:
                     "file through python/perl/node does not make it allowed. Propose the "
                     "diff to the user.",
                 )
+            # A write verb naming the state directory.
+            if GUARD_STATE_REF_RE.search(tok) or is_guard_state_path(tok):
+                return state_denied(tok)
             if OBFUSCATION_RE.search(tok):
                 return denied(
                     "interpreter-obfuscated-write",
@@ -2408,6 +2502,7 @@ COMMAND_RULES = (
     rule_keychain_file_op,
     rule_shell_rc_unlock,
     rule_protected_mutation,
+    rule_guard_state_mutation,
     rule_protected_redirect,
     rule_interpreter_write,
     rule_secret_file_read,
@@ -2450,6 +2545,12 @@ def evaluate_file_write(path: str) -> Verdict:
             "DENIED: the guard's own config directory (~/.config/secure-agent/) is not "
             "agent-writable — this is how an agent would disable the guard watching it. "
             "Reads stay allowed; propose the change to the user instead.",
+        )
+    if is_guard_state_path(path):
+        return denied(
+            "guard-state-write-tool",
+            f"Blocked: an agent tried to write {norm(path)}.",
+            STATE_DENY_REPLY,
         )
     if is_harness_config_path(path):
         return denied(
