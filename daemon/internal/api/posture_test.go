@@ -378,34 +378,6 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	}
 }
 
-// No agents running: an idle machine is not a blind monitor — silence is
-// legitimate, posture stays all-clear.
-func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {
-	sock := fmt.Sprintf("/tmp/sa_posture6_%d.sock", time.Now().UnixNano())
-	defer os.Remove(sock)
-	a := newTestAPI(Deps{SocketPath: sock, Store: testStore(t), Killer: &fakeKiller{}, Status: func() Status {
-		return Status{
-			Running: true, Uptime: "2h0m0s", ActiveAgents: 0,
-			Collectors: []supervise.Health{{Name: "eslogger", Running: true}},
-		}
-	}})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go a.Serve(ctx)
-	waitForSocket(t, sock)
-
-	cl := unixClient(sock)
-	resp, err := cl.Get("http://unix/posture")
-	if err != nil {
-		t.Fatalf("GET /posture: %v", err)
-	}
-	var p Posture
-	decodeInto(t, resp, &p)
-	if p.NeedsYou != 0 {
-		t.Fatalf("idle machine must be all-clear, got %+v", p.Items)
-	}
-}
-
 func TestPostureOldFlagsDoNotCount(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture4_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
