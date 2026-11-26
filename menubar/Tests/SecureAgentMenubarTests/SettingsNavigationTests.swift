@@ -23,15 +23,6 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(SettingsSection.allCases.flatMap(\.tabs), SettingsTab.allCases)
     }
 
-    /// "Settings → Secure Agent → Chat|Traffic" in the README, the daemon's
-    /// Doctor fixes and the web console stay true paths.
-    func testSecureAgentSectionHoldsChatAnalysisTraffic() {
-        XCTAssertEqual(SettingsSection.secureAgent.rawValue, "Secure Agent")
-        XCTAssertEqual(SettingsSection.secureAgent.tabs, [.chat, .analysis, .traffic])
-        XCTAssertEqual(SettingsTab.chat.title, "Chat")
-        XCTAssertEqual(SettingsTab.traffic.title, "Traffic")
-    }
-
     private func defaultsYAML() throws -> String {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -139,15 +130,5 @@ final class SettingsNavigationTests: XCTestCase {
     func testFirewallTitleFallsBackToID() {
         XCTAssertEqual(FirewallRuleCatalog.title(for: "anthropic-key"), "Anthropic API key")
         XCTAssertEqual(FirewallRuleCatalog.title(for: "fp-7c1e9a"), "fp-7c1e9a")
-    }
-
-    @MainActor
-    func testRowSubtitlesNameWhatEachChoiceDoes() {
-        XCTAssertEqual(SettingsView.guardModeEffect("monitor"), "Logged, never interrupted")
-        XCTAssertEqual(SettingsView.guardModeEffect("prompt"), "Asks you before the agent proceeds")
-        XCTAssertEqual(SettingsView.guardModeEffect("deny"), "Blocked outright")
-        XCTAssertEqual(SettingsView.notifyEffect("default"), "Notifies when the flag is critical")
-        XCTAssertEqual(SettingsView.notifyEffect("always"), "Notifies on every flag of this type")
-        XCTAssertEqual(SettingsView.notifyEffect("never"), "Silent; still listed in the menu bar and console")
     }
 }

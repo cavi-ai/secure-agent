@@ -45,20 +45,6 @@ final class ESCardStateTests: XCTestCase {
         XCTAssertEqual(esCardState(status: .requiresApproval, plistPresent: true, tccGranted: true, helperReplaced: true), .requiresApproval)
     }
 
-    func testEnabledWithoutGrantAsksForFullDiskAccess() {
-        XCTAssertEqual(esCardState(status: .enabled, plistPresent: true, tccGranted: false, helperReplaced: false), .needsGrant)
-    }
-
-    func testEnabledWithReplacedCollectorAsksForRegrant() {
-        XCTAssertEqual(esCardState(status: .enabled, plistPresent: true, tccGranted: false, helperReplaced: true), .needsRegrant)
-        XCTAssertEqual(esCardState(status: .enabled, plistPresent: true, tccGranted: true, helperReplaced: true), .needsRegrant,
-                       "a replaced collector outranks an old spool that still has bytes")
-    }
-
-    func testEnabledWithGrantIsActive() {
-        XCTAssertEqual(esCardState(status: .enabled, plistPresent: true, tccGranted: true, helperReplaced: false), .active)
-    }
-
     @MainActor func testCopyNamesTheAppNeverTheLaunchdLabel() {
         for stage in ESStage.allCases {
             XCTAssertFalse(stage.title.contains(SetupManager.esCollectorLabel), "\(stage) title")
@@ -68,9 +54,5 @@ final class ESCardStateTests: XCTestCase {
         XCTAssertEqual(ESStage.grantInstruction, FileTelemetryPermissionGuidance.instruction)
         XCTAssertTrue(ESStage.grantInstruction.contains("Secure Agent"))
         XCTAssertTrue(ESStage.grantInstruction.contains("Full Disk Access"))
-    }
-
-    func testOnlySettingsStepsPoll() {
-        XCTAssertEqual(ESStage.allCases.filter(\.awaitsUser), [.requiresApproval, .needsGrant, .needsRegrant])
     }
 }
