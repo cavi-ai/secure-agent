@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -37,7 +38,14 @@ func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() 
 		if bootErr == nil && !started.IsZero() && started.Before(boot) {
 			continue
 		}
-		if err := storePreviousRunFinding(st, pending, now); err != nil {
+		finding := pending
+		if pending.Ending == RunEndingOwnerStop {
+			if ownerStopConfirmed(st, pending.Record) {
+				continue
+			}
+			finding.Ending = RunEndingUnconfirmedStop
+		}
+		if err := storePreviousRunFinding(st, finding, now); err != nil {
 			log.Printf("secure-agentd: %s finding not stored: %v", monitorStoppedRule, err)
 			remaining = append(remaining, pending)
 		}
@@ -50,6 +58,54 @@ func raisePreviousRunFindings(st *store.Store, run *RunTracker, bootTime func() 
 		// A retry can recognize findings already in the store by their stable IDs.
 		log.Printf("secure-agentd: pending run records not updated: %v", err)
 	}
+}
+
+// ownerStopConfirmed reports whether the store agrees that rec ended by an
+// owner stop: it holds a valid stop intent for the run, or it holds no runs at all
+// (a store written before runs were recorded).
+func ownerStopConfirmed(st *store.Store, rec RunRecord) bool {
+	intent, found, err := st.MonitorRunStopIntent(rec.PID, rec.StartedAt)
+	if err != nil {
+		log.Printf("secure-agentd: stored run unreadable: %v", err)
+		return false
+	}
+	if found {
+		return stopIntentValidAt(intent, rec.EndedAt)
+	}
+	has, err := st.HasMonitorRuns()
+	if err != nil {
+		log.Printf("secure-agentd: stored runs unreadable: %v", err)
+		return false
+	}
+	return !has
+}
+
+// recordRunStart stores this run's pid and start time so a later start can
+// confirm how the run ended.
+func recordRunStart(st *store.Store, run *RunTracker) {
+	if st == nil || run == nil {
+		return
+	}
+	run.mu.Lock()
+	pid, started := run.rec.PID, run.rec.StartedAt
+	run.mu.Unlock()
+	if err := st.PutMonitorRun(pid, started); err != nil {
+		log.Printf("secure-agentd: run start not stored: %v", err)
+	}
+}
+
+// recordStopIntent records the owner's stop intent in the run record and in
+// the event store.
+func recordStopIntent(st *store.Store, run *RunTracker) (at, validUntil time.Time, err error) {
+	if st == nil || run == nil {
+		return time.Time{}, time.Time{}, errors.New("run record or event store unavailable")
+	}
+	return run.recordStopIntent(func(rec RunRecord) error {
+		if err := st.PutMonitorStopIntent(rec.PID, rec.StartedAt, rec.StopIntentAt); err != nil {
+			return fmt.Errorf("store stop intent: %w", err)
+		}
+		return nil
+	})
 }
 
 func storePreviousRunFinding(st *store.Store, pending pendingRun, now func() time.Time) error {
@@ -117,6 +173,8 @@ func runEndingPhrase(ending RunEnding) (sub, how string) {
 		return "start failure", "failed during start"
 	case RunEndingNoRecord:
 		return "no ending recorded", "ended with no ending recorded"
+	case RunEndingUnconfirmedStop:
+		return "owner stop with no valid stored stop intent", "was recorded as an owner stop with no valid stored stop intent"
 	default:
 		return string(ending), "ended as " + string(ending)
 	}

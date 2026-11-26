@@ -6,7 +6,7 @@ import (
 )
 
 var correlatorRules = []string{
-	"keychain-access", "keychain-security-cli", "launch-item-change", "monitor-stopped", "proxy-payload-inspection", "proxy-prompt-injection",
+	"keychain-access", "keychain-security-cli", "launch-item-change", "monitor-state-write", "monitor-stopped", "proxy-payload-inspection", "proxy-prompt-injection",
 	"proxy-secret-leak", "secret-in-transcript", "sensitive-read-then-connect", "tcc-tamper", "trust-change",
 	"xprotect-detection",
 }

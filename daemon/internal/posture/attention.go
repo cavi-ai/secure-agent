@@ -606,6 +606,8 @@ func HumanFlagTitle(rule string) string {
 		return "XProtect detected malware"
 	case "monitor-stopped":
 		return "Monitor stop needs review"
+	case "monitor-state-write":
+		return "Agent changed the monitor's state files"
 	case "proxy-prompt-injection":
 		return "Prompt injection in a response"
 	case "proxy-inspection-incomplete":

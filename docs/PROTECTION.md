@@ -72,7 +72,7 @@ With file telemetry enabled, three rules flag changes that outlast a session. Th
 
 ## Monitor stops
 
-The daemon records how each run ended. Quitting the app and `secure-agent stop` record an owner stop. At the next start, a run since the last boot that ended any other way (a signal with no stop intent, the owning app's exit, a control API or start failure, or no ending recorded) raises the severity-3 finding `monitor-stopped`, which names the pid, how the run ended and its times. Directory Guard denies agent commands that stop Secure Agent's processes or services (rule `guard-control-stop`).
+The daemon records how each run ended. Quitting the app and `secure-agent stop` record an owner stop. At the next start, a run since the last boot that ended any other way (a signal with no stop intent, the owning app's exit, a control API or start failure, or no ending recorded) raises the severity-3 finding `monitor-stopped`, which names the pid, how the run ended and its times. Directory Guard denies agent commands that stop Secure Agent's processes or services (rule `guard-control-stop`). The event store keeps each run's start and stop intent: a record that reports an owner stop the store holds no stop intent for raises the same finding. With file telemetry enabled, an agent that writes, replaces or deletes a file in the state directory, other than the activity log and session markers its hooks write, raises the severity-3 finding `monitor-state-write`.
 
 ## Review recurring connections
 

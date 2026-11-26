@@ -103,6 +103,9 @@ type Event struct {
 	SessionID string `json:"session_id,omitempty"`
 	// File events:
 	Path string `json:"path,omitempty"`
+	// RenameSource is the old path of a rename, used by live correlation.
+	// Path stays the destination for event storage and other consumers.
+	RenameSource string `json:"-"`
 	// Conn events:
 	RemoteHost string `json:"remote_host,omitempty"`
 	RemotePort int    `json:"remote_port,omitempty"`

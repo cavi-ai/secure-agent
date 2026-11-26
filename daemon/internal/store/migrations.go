@@ -193,6 +193,7 @@ func createTables(tx *sql.Tx) ([]string, error) {
 		agentAsksSchema,
 		scanCacheSchema,
 		hookRunsSchema,
+		monitorRunsSchema,
 	}
 	createQueries = append(createQueries, sysAgentSchemas...)
 
