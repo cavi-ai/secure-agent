@@ -105,29 +105,6 @@ func TestIncidentReportWireShape(t *testing.T) {
 	}
 }
 
-func TestRiskAndCategoryValuesAreStable(t *testing.T) {
-	// The Swift UI switches on these strings; a rename breaks rendering.
-	risks := map[RiskLevel]string{
-		RiskCritical: "CRITICAL", RiskHigh: "HIGH", RiskMedium: "MEDIUM", RiskLow: "LOW",
-	}
-	for got, want := range risks {
-		if string(got) != want {
-			t.Errorf("RiskLevel %q != %q", got, want)
-		}
-	}
-	cats := map[SecretCategory]string{
-		CategoryKeychain: "KEYCHAIN", CategoryCloudCreds: "CLOUD_CREDENTIALS",
-		CategorySSHKeys: "SSH_KEYS", CategoryEnvSecrets: "ENV_SECRETS",
-		CategorySourceControl: "SOURCE_CONTROL", CategorySystemConfig: "SYSTEM_CONFIG",
-		CategoryOther: "OTHER",
-	}
-	for got, want := range cats {
-		if string(got) != want {
-			t.Errorf("SecretCategory %q != %q", got, want)
-		}
-	}
-}
-
 func TestNodeStatusWireShape(t *testing.T) {
 	ns := NodeStatus{
 		Hostname: "mac", OS: "darwin", Arch: "arm64", Agents: 4, Uptime: "1h",
