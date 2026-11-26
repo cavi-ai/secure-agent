@@ -128,6 +128,7 @@ test-console:
 	./packaging/test/check_no_personal_paths.sh
 	./packaging/test/check_console_css.sh
 	node --test 'packaging/test/console/*.test.mjs'
+	python3 -m unittest discover -s packaging/test/console_dom -p 'test_*.py'
 	python3 packaging/test/console_dom/run_dom_tests.py
 
 test-macos:

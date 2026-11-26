@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,6 +268,30 @@ func TestOldSizeAnswersWhileRemeasured(t *testing.T) {
 	rep = h.Report(context.Background(), false)
 	if got := findRow(t, rep, done).SizeBytes; got < before+80000 || rep.Refreshing {
 		t.Fatalf("after re-measuring: size %d (was %d), refreshing=%v", got, before, rep.Refreshing)
+	}
+}
+
+// A pass saves its sizes as it measures them, at most every sizeSaveEvery,
+// so a daemon restarted mid-pass keeps what it measured.
+func TestSizerSavesSizesDuringThePass(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	f.worktree(t, "one")
+	f.worktree(t, "two")
+	st := newMemStore()
+	st.activity = []model.WorkspaceActivity{{Workspace: f.main}}
+	var calls atomic.Int64
+	base := time.Now()
+	h := New(st, home, Options{})
+	h.now = func() time.Time { return base.Add(time.Duration(calls.Add(1)) * sizeSaveEvery) }
+
+	h.Report(context.Background(), true)
+	h.sizeWG.Wait()
+	st.mu.Lock()
+	saves := st.puts[cacheSizesKey]
+	st.mu.Unlock()
+	if saves != 3 {
+		t.Fatalf("size saves = %d, want one per measured worktree and one at the end of the pass", saves)
 	}
 }
 

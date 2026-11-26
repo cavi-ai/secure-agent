@@ -638,7 +638,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((scenarios.has('explaindemo') || scenarios.has('patterndemo') || scenarios.has('ghdemo') || scenarios.has('rawmute') || scenarios.has('orgallowdemo') || scenarios.has('routinedemo') || scenarios.has('bulkdemo') || scenarios.has('scopedpermission') || scenarios.has('groupdemo')) && opts.body) line += ' body=' + opts.body;
+      if ((scenarios.has('explaindemo') || scenarios.has('patterndemo') || scenarios.has('ghdemo') || scenarios.has('rawmute') || scenarios.has('orgallowdemo') || scenarios.has('routinedemo') || scenarios.has('bulkdemo') || scenarios.has('scopedpermission') || scenarios.has('groupdemo') || scenarios.has('discussdemo')) && opts.body) line += ' body=' + opts.body;
       if (scenarios.has('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
