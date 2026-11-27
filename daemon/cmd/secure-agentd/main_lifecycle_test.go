@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -247,7 +248,51 @@ func TestDaemonRecoversAfterConfigRepairAndStopsOnSignal(t *testing.T) {
 	if err != nil || response.StatusCode != http.StatusOK || !status.Running {
 		t.Fatalf("repaired daemon status: running=%t, HTTP=%d, error=%v", status.Running, response.StatusCode, err)
 	}
+	lease, err := os.OpenFile(cfg["socket_path"].(string)+".headless.lock", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	leaseFD := int(lease.Fd())
+	if err := unix.Flock(leaseFD, unix.LOCK_EX|unix.LOCK_NB); !errors.Is(err, unix.EWOULDBLOCK) {
+		t.Fatalf("running headless daemon should hold the hook lease: %v", err)
+	}
+	decision := make(chan error, 1)
+	go func() {
+		res, err := client.Post("http://unix/guard/decision", "application/json",
+			strings.NewReader(`{"agent":"claude","tool":"Read","path":"/fixture/.env","rule_id":"env-files"}`))
+		if err == nil {
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusServiceUnavailable {
+				err = fmt.Errorf("pending request completed with HTTP %d, want 503 after shutdown", res.StatusCode)
+			} else if lockErr := unix.Flock(leaseFD, unix.LOCK_EX|unix.LOCK_NB); lockErr != nil {
+				err = fmt.Errorf("pending request failed while hooks still saw an active headless daemon: %w", lockErr)
+			}
+		}
+		decision <- err
+	}()
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		res, err := client.Get("http://unix/guard/pending")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pending []struct{ ID string }
+		err = json.NewDecoder(res.Body).Decode(&pending)
+		res.Body.Close()
+		if err != nil || res.StatusCode != http.StatusOK {
+			t.Fatalf("read pending requests: HTTP %d, %v", res.StatusCode, err)
+		}
+		if len(pending) == 1 && pending[0].ID != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("guard request did not reach the daemon")
+		}
+	}
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-decision; err != nil {
 		t.Fatal(err)
 	}
 	select {

@@ -10,6 +10,37 @@ from test_hook_lifecycle import running_app
 
 
 class HarnessGuardTests(unittest.TestCase):
+    def test_antigravity_uses_working_directory_for_ambiguous_workspace(self):
+        with tempfile.TemporaryDirectory() as home, running_app(home):
+            first = Path(home, "first").resolve()
+            second = first / "second"
+            second.mkdir(parents=True)
+            overrides = Path(home, "cwd-overrides.json")
+            overrides.write_text(json.dumps([
+                {"cwd_prefix": str(second), "rules": {"env-files": "deny"}},
+                {"cwd_prefix": str(first), "rules": {"env-files": "monitor"}},
+            ]))
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("SECURE_AGENT_", "CLAUDE_"))}
+            env.update(HOME=home, SECURE_AGENT_GUARD_CWD_OVERRIDES=str(overrides),
+                       SECURE_AGENT_ACTIVITY_LOG=home + "/activity.jsonl")
+            script = str(Path(__file__).with_name("harness_guard.py"))
+            for args, cwd, workspaces, expected in [
+                ({"Path": ".env"}, second, [first, second], "deny"),
+                ({"Path": str(second / ".env")}, second, [first, second], "deny"),
+                ({"Path": str(second / ".env")}, first, [first, second], "allow"),
+                ({"Path": str(second / ".env")}, first, [Path(home, "other"), second], "deny"),
+                ({"Path": ".env", "Cwd": str(second)}, first, [first, second], "deny"),
+            ]:
+                with self.subTest(args=args, cwd=cwd, workspaces=workspaces):
+                    payload = {"toolCall": {"name": "read_file", "args": args},
+                               "workspacePaths": [str(root) for root in workspaces]}
+                    result = subprocess.run([sys.executable, script, "antigravity", "PreToolUse"],
+                                            input=json.dumps(payload), cwd=cwd, env=env,
+                                            text=True, capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout).get("decision"), expected)
+
     def test_antigravity_cli_path_cannot_bypass_file_guard(self):
         with tempfile.TemporaryDirectory() as home, running_app(home):
             modes = Path(home, "modes.json")

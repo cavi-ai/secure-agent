@@ -2368,20 +2368,23 @@ type GuardPathAllow struct {
 	CreatedAt string `json:"created_at"`
 }
 
+func guardPathAllowKey(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
 // PutGuardPathAllow records one per-path allow (idempotent upsert).
 func (s *Store) PutGuardPathAllow(g GuardPathAllow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cleanPath := g.Path
-	if cleanPath != "" {
-		cleanPath = filepath.Clean(cleanPath)
-	}
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(
 		`INSERT INTO guard_path_allows (agent, rule_id, path, created_at)
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(agent, rule_id, path) DO UPDATE SET created_at=excluded.created_at`,
-		g.Agent, g.RuleID, cleanPath, ts)
+		g.Agent, g.RuleID, guardPathAllowKey(g.Path), ts)
 	if err != nil {
 		log.Printf("store: put guard_path_allows error: %v", err)
 	}
@@ -2406,9 +2409,7 @@ func (s *Store) guardPathAllowed(agent, ruleID, path string) bool {
 		if err := rows.Scan(&allowed); err != nil {
 			continue
 		}
-		if allowed != "" {
-			allowed = filepath.Clean(allowed)
-		}
+		allowed = guardPathAllowKey(allowed)
 		if path == allowed || (allowed == "/" && strings.HasPrefix(path, "/")) || (len(path) > len(allowed) && path[:len(allowed)] == allowed && path[len(allowed)] == '/') {
 			return true
 		}
@@ -2447,7 +2448,7 @@ func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
 	return out, nil
 }
 
-// DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
+// DeleteGuardPathAllow revokes one exception, including legacy spellings of its path.
 // Storage failures return an error rather than reporting an absent exception.
 func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, writeErr error) {
 	s.mu.Lock()
@@ -2457,22 +2458,42 @@ func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, 
 			s.noteWrite("guard path revocations", writeErr)
 		}
 	}()
-	cleanPath := path
-	if cleanPath != "" {
-		cleanPath = filepath.Clean(cleanPath)
-	}
-	res, err := s.db.Exec(
-		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND (path = ? OR path = ?)`,
-		agent, ruleID, path, cleanPath,
-	)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("delete guard path allow: %w", err)
+		return false, fmt.Errorf("begin guard path allow revocation: %w", err)
 	}
-	n, err := res.RowsAffected()
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT path FROM guard_path_allows WHERE agent = ? AND rule_id = ?`, agent, ruleID)
 	if err != nil {
-		return false, fmt.Errorf("guard path allow deletion result: %w", err)
+		return false, fmt.Errorf("read guard path allows for revocation: %w", err)
 	}
-	return n > 0, nil
+	defer rows.Close()
+	key := guardPathAllowKey(path)
+	var matches []string
+	for rows.Next() {
+		var stored string
+		if err := rows.Scan(&stored); err != nil {
+			return false, fmt.Errorf("scan guard path allow for revocation: %w", err)
+		}
+		if guardPathAllowKey(stored) == key {
+			matches = append(matches, stored)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("read guard path allows for revocation: %w", err)
+	}
+	if len(matches) == 0 {
+		return false, nil
+	}
+	for _, stored := range matches {
+		if _, err := tx.Exec(`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`, agent, ruleID, stored); err != nil {
+			return false, fmt.Errorf("delete guard path allow: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit guard path allow revocation: %w", err)
+	}
+	return true, nil
 }
 
 // PutGuardRule saves an agent's rule-wide answer. A failed save is returned

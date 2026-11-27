@@ -43,16 +43,23 @@ def _app_running_safe():
 def _pick_workspace(workspaces, path):
     if not isinstance(workspaces, list) or not workspaces:
         return None
-    if isinstance(path, str) and path:
-        norm_path = os.path.normpath(os.path.expanduser(path))
-        for ws in workspaces:
-            if isinstance(ws, str) and ws:
-                norm_ws = os.path.normpath(ws)
-                if norm_path == norm_ws or norm_path.startswith(norm_ws + os.sep):
-                    return ws
     if len(workspaces) == 1 and isinstance(workspaces[0], str):
-        return workspaces[0]
-    return workspaces[0] if isinstance(workspaces[0], str) else None
+        return workspaces[0] or None
+    if not isinstance(path, str) or not path:
+        return None
+    norm_path = os.path.normpath(os.path.expanduser(path))
+    if not os.path.isabs(norm_path):
+        return None
+    matched = None
+    for ws in workspaces:
+        if not isinstance(ws, str) or not ws:
+            continue
+        norm_ws = os.path.normpath(ws)
+        if norm_path == norm_ws or norm_path.startswith(norm_ws.rstrip(os.sep) + os.sep):
+            if matched is not None and matched != norm_ws:
+                return None
+            matched = norm_ws
+    return matched
 
 
 def main():

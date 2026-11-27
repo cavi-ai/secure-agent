@@ -513,6 +513,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (generation !== handoffGeneration) return;
     sessionEnded = false;
+    const openPlans = new Set();
+    document.querySelectorAll('.plan-slot[data-plan-subject]').forEach(slot => {
+      openPlans.add(slot.dataset.planSubject);
+      slot.innerHTML = '<div class="loading-spinner">Loading the playbook…</div>';
+    });
+    for (const subject of openPlans) loadPlanSlot(subject);
     document.body.classList.remove('is-ended', 'is-paused');
     document.getElementById('session-ended').hidden = true;
     for (const [el, previous] of pausedElements) {
@@ -2841,6 +2847,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!res.ok) throw new Error((await res.text()).trim() || 'Instruction update failed');
       const result = await res.json();
+      if (instructionRequests.get(subject) !== state) return;
       if (!result?.applied || result.path !== preview.path || result.instruction !== preview.instruction) throw new Error('The update could not be confirmed; inspect the instruction file before retrying.');
       const current = planResponseCache.get(subject);
       if (current?.instruction?.path === preview.path && current.instruction.instruction === preview.instruction) {
@@ -2848,15 +2855,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       showToast('Safety rule applied to ' + result.path, 'success');
     } catch (err) {
+      if (instructionRequests.get(subject) !== state) return;
       state.error = 'Could not confirm the update: ' + (err.message || err);
       const current = planResponseCache.get(subject);
       if (current?.instruction) current.instruction = { ...current.instruction, ready: false, reason: state.error };
       // Refresh the file revision without automatically repeating a write.
       await loadPlanSlot(subject);
     } finally {
-      state.busy = false;
-      const current = planResponseCache.get(subject);
-      if (current) paintPlanSlots(subject, current);
+      if (instructionRequests.get(subject) === state) {
+        state.busy = false;
+        const current = planResponseCache.get(subject);
+        if (current) paintPlanSlots(subject, current);
+      }
     }
   };
   async function fetchPlan(subject) {
@@ -2868,40 +2878,47 @@ document.addEventListener('DOMContentLoaded', () => {
     clearTimeout(planPolls.get(subject));
     planPolls.delete(subject);
     if (sessionEnded || tries >= 30) return;
+    const generation = handoffGeneration;
     planPolls.set(subject, setTimeout(async () => {
       planPolls.delete(subject);
-      if (sessionEnded || !planSlots(subject).length) return;
+      if (sessionEnded || generation !== handoffGeneration || !planSlots(subject).length) return;
       try {
         const resp = await fetchPlan(subject);
-        if (sessionEnded) return;
+        if (sessionEnded || generation !== handoffGeneration) return;
         paintPlanSlots(subject, resp);
         if (resp.status === 'pending') pollPlan(subject, tries + 1);
       } catch {
-        if (!sessionEnded) pollPlan(subject, tries + 1);
+        if (!sessionEnded && generation === handoffGeneration) pollPlan(subject, tries + 1);
       }
     }, 3000));
   }
   async function loadPlanSlot(subject) {
+    if (sessionEnded) return;
+    const generation = handoffGeneration;
     try {
       const resp = await fetchPlan(subject);
+      if (sessionEnded || generation !== handoffGeneration) return;
       paintPlanSlots(subject, resp);
       if (resp.status === 'pending') pollPlan(subject);
     } catch (err) {
+      if (sessionEnded || generation !== handoffGeneration) return;
       planSlots(subject).forEach(el => { el.innerHTML = html`<p class="plan-status">No playbook: ${err.message || err}</p>`; });
     }
   }
   window.askAdvisorPlan = async function(subject) {
+    const generation = handoffGeneration;
     try {
       const res = await apiFetch('/advisor/plan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subject })
       });
       const resp = await res.json().catch(() => null);
+      if (sessionEnded || generation !== handoffGeneration) return;
       if (resp) paintPlanSlots(subject, resp);
       if (res.status === 202) pollPlan(subject);
       else if (!res.ok) showToast((resp && resp.reason) || 'The advisor could not take the request', 'info');
     } catch (err) {
-      showToast(`Could not ask the advisor: ${err.message || err}`, 'error');
+      if (!sessionEnded && generation === handoffGeneration) showToast(`Could not ask the advisor: ${err.message || err}`, 'error');
     }
   };
   // Operator labels: Mark as routine / Mark as not ok, and the kill record.
