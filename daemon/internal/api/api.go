@@ -84,9 +84,6 @@ type API struct {
 	resourcePolicy  func(config.ResourceControlConfig) error
 	policyWriteMu   sync.Mutex
 
-	// plan connects /advisor/plan to the current advisor (plan.go).
-	plan *PlanFuncs
-
 	// NoAgent enforcement and the file actions (files.go, tcppeer.go).
 	isAgentPID   func(pid int32) (isAgent, known bool)
 	tcpClientPID func(remoteAddr string) (int32, error)
@@ -105,6 +102,7 @@ type API struct {
 	guardHandlers
 	worktreeHandlers
 	sysAgentHandlers
+	planHandlers
 
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore
@@ -375,7 +373,6 @@ func New(d Deps) *API {
 		publishEvent:    d.Telemetry.PublishEvent,
 		deltaHub:        d.Telemetry.DeltaHub,
 		isAgentPID:      d.Peers.IsAgentPID,
-		plan:            d.Advisors.Plan,
 		tcpClientPID:    d.System.TCPClientPID,
 		openPath:        d.System.OpenPath,
 		stopIntent:      d.StopIntent,
@@ -403,6 +400,15 @@ func New(d Deps) *API {
 	a.sysAgentHandlers.sysAgent = d.Workspace.SysAgent
 	a.sysAgentHandlers.store = d.Store
 	a.sysAgentHandlers.worktrees = d.Workspace.Worktrees
+	a.planHandlers.plan = d.Advisors.Plan
+	a.planHandlers.store = d.Store
+	a.planHandlers.mutes = d.Policy.Mutes
+	a.planHandlers.allowlist = d.Policy.Allowlist
+	a.planHandlers.explain = a.explainFlag
+	a.planHandlers.evidence = a.fileEvidence
+	a.planHandlers.instruction = a.planInstruction
+	a.planHandlers.labelsFor = a.labelContext
+	a.planHandlers.detail = a.fileDetail
 	a.peerChk = d.Peers.Checker
 	a.guardHandlers.peerChk = d.Peers.Checker
 	if d.Peers.Checker != nil {

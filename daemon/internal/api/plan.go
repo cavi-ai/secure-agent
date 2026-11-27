@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
 	"github.com/cavi-ai/secure-agent/daemon/internal/posture"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 )
 
@@ -69,9 +71,26 @@ type planTarget struct {
 	sessionID string
 }
 
+// planHandlers serves /advisor/plan and resolves plan subjects, and holds
+// only what those handlers use.
+type planHandlers struct {
+	// plan connects /advisor/plan to the current advisor.
+	plan *PlanFuncs
+
+	store     *store.Store
+	mutes     *correlate.MuteStore
+	allowlist *correlate.AllowlistStore
+
+	explain     func(model.Flag, bool) *model.FlagExplain
+	evidence    func(string, int) (string, []model.FileFinding, []model.FileAccess, error)
+	instruction func(planTarget) *sysagent.InstructionPreview
+	labelsFor   func(planTarget, []string) (*model.LabelContext, error)
+	detail      func(string, []model.FileFinding, []model.FileAccess) model.FileDetail
+}
+
 // resolvePlanTarget maps "flag:<id>", "incident:<id>" or "file:<path>" onto
 // stored data; false when the subject names nothing stored.
-func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
+func (ph *planHandlers) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	kind, id, ok := strings.Cut(subject, ":")
 	if !ok || id == "" {
 		return planTarget{}, false, nil
@@ -79,7 +98,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	t := planTarget{subject: subject, kind: kind}
 	switch kind {
 	case "flag":
-		f, ok, err := a.store.GetFlag(id)
+		f, ok, err := ph.store.GetFlag(id)
 		if err != nil {
 			return planTarget{}, false, err
 		}
@@ -89,7 +108,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		t.flag = &f
 		t.path = flagEvidencePath(f)
 	case "incident":
-		inc, err := a.store.GetIncidentDetail(id)
+		inc, err := ph.store.GetIncidentDetail(id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return planTarget{}, false, nil
 		}
@@ -99,13 +118,13 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		if inc == nil {
 			return planTarget{}, false, nil
 		}
-		inc.IncidentReport, err = currentIncidentReport(a.store, inc.IncidentReport)
+		inc.IncidentReport, err = currentIncidentReport(ph.store, inc.IncidentReport)
 		if err != nil {
 			return planTarget{}, false, err
 		}
 		t.incident = &inc.IncidentReport
 		if inc.FlagID != "" {
-			f, ok, err := a.store.GetFlag(inc.FlagID)
+			f, ok, err := ph.store.GetFlag(inc.FlagID)
 			if err != nil {
 				return planTarget{}, false, err
 			}
@@ -121,7 +140,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 		if !ok {
 			return planTarget{}, false, nil
 		}
-		recordedPath, findings, accesses, err := a.fileEvidence(p, fileListLimit)
+		recordedPath, findings, accesses, err := ph.evidence(p, fileListLimit)
 		if err != nil {
 			return planTarget{}, false, err
 		}
@@ -135,7 +154,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	if t.path != "" && kind != "file" {
 		// A flag or incident may name a path and still resolve when no file
 		// row is stored. A read error still fails the resolve.
-		_, findings, accesses, err := a.fileEvidence(t.path, fileListLimit)
+		_, findings, accesses, err := ph.evidence(t.path, fileListLimit)
 		if err != nil {
 			return planTarget{}, false, err
 		}
@@ -144,7 +163,7 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 	if kind == "file" {
 		for _, f := range t.findings {
 			if f.Kind == "flag" && t.flag == nil {
-				fl, ok, err := a.store.GetFlag(f.ID)
+				fl, ok, err := ph.store.GetFlag(f.ID)
 				if err != nil {
 					return planTarget{}, false, err
 				}
@@ -153,12 +172,12 @@ func (a *API) resolvePlanTarget(subject string) (planTarget, bool, error) {
 				}
 			}
 			if f.Kind == "incident" && t.incident == nil {
-				inc, err := a.store.GetIncidentDetail(f.ID)
+				inc, err := ph.store.GetIncidentDetail(f.ID)
 				if err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return planTarget{}, false, err
 				}
 				if inc != nil {
-					inc.IncidentReport, err = currentIncidentReport(a.store, inc.IncidentReport)
+					inc.IncidentReport, err = currentIncidentReport(ph.store, inc.IncidentReport)
 					if err != nil {
 						return planTarget{}, false, err
 					}
@@ -212,17 +231,17 @@ func planEvidenceKey(t planTarget) string {
 }
 
 // planReady reports whether the advisor can take a plan, and why not.
-func (a *API) planReady() (bool, string) {
-	if a.plan == nil || a.plan.Ready == nil || a.plan.Enqueue == nil {
+func (ph *planHandlers) planReady() (bool, string) {
+	if ph.plan == nil || ph.plan.Ready == nil || ph.plan.Enqueue == nil {
 		return false, "the local advisor is off: enable it in Settings → Advisor"
 	}
-	return a.plan.Ready()
+	return ph.plan.Ready()
 }
 
-func (a *API) handleAdvisorPlan(w http.ResponseWriter, r *http.Request) {
+func (ph *planHandlers) handleAdvisorPlan(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		a.servePlan(w, r.URL.Query().Get("subject"))
+		ph.servePlan(w, r.URL.Query().Get("subject"))
 	case http.MethodPost:
 		var req struct {
 			Subject string `json:"subject"`
@@ -231,7 +250,7 @@ func (a *API) handleAdvisorPlan(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "body must be {\"subject\": \"flag:<id>|incident:<id>|file:<path>\"}", http.StatusBadRequest)
 			return
 		}
-		a.requestPlan(w, req.Subject)
+		ph.requestPlan(w, req.Subject)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -240,8 +259,8 @@ func (a *API) handleAdvisorPlan(w http.ResponseWriter, r *http.Request) {
 // planSubject is the shared start of a plan read or request: the stored
 // subject, its playbook and flag, and the operator's labels. It writes the
 // HTTP error and returns false when that subject cannot be served.
-func (a *API) planSubject(w http.ResponseWriter, subject string) (planTarget, PlanResponse, bool) {
-	t, ok, err := a.resolvePlanTarget(subject)
+func (ph *planHandlers) planSubject(w http.ResponseWriter, subject string) (planTarget, PlanResponse, bool) {
+	t, ok, err := ph.resolvePlanTarget(subject)
 	if err != nil {
 		http.Error(w, "Subject data unavailable; retry", http.StatusServiceUnavailable)
 		return planTarget{}, PlanResponse{}, false
@@ -250,25 +269,25 @@ func (a *API) planSubject(w http.ResponseWriter, subject string) (planTarget, Pl
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return planTarget{}, PlanResponse{}, false
 	}
-	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
-	labels, err := a.labelContext(t, a.offeredActions(t))
+	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: ph.planFlag(t)}
+	labels, err := ph.labelsFor(t, ph.offeredActions(t))
 	if err != nil {
 		http.Error(w, "Operator history unavailable; retry", http.StatusServiceUnavailable)
 		return planTarget{}, PlanResponse{}, false
 	}
 	resp.Labels = labels
-	resp.Instruction = a.planInstruction(t)
+	resp.Instruction = ph.instruction(t)
 	return t, resp, true
 }
 
-func (a *API) servePlan(w http.ResponseWriter, subject string) {
-	t, resp, ok := a.planSubject(w, subject)
+func (ph *planHandlers) servePlan(w http.ResponseWriter, subject string) {
+	t, resp, ok := ph.planSubject(w, subject)
 	if !ok {
 		return
 	}
 	resp.Status = "none"
-	resp.AdvisorReady, resp.Reason = a.planReady()
-	p, found, err := a.store.AdvisorPlanResultFor(subject)
+	resp.AdvisorReady, resp.Reason = ph.planReady()
+	p, found, err := ph.store.AdvisorPlanResultFor(subject)
 	if err != nil {
 		http.Error(w, "Advisor plan unavailable; retry", http.StatusServiceUnavailable)
 		return
@@ -281,7 +300,7 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 		}
 	}
 	switch {
-	case a.plan != nil && a.plan.Pending != nil && a.plan.Pending(subject):
+	case ph.plan != nil && ph.plan.Pending != nil && ph.plan.Pending(subject):
 		resp.Status = "pending"
 	case resp.Plan == nil && !resp.AdvisorReady:
 		resp.Status = "disabled"
@@ -289,12 +308,12 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 	writeJSON(w, resp)
 }
 
-func (a *API) requestPlan(w http.ResponseWriter, subject string) {
-	t, resp, ok := a.planSubject(w, subject)
+func (ph *planHandlers) requestPlan(w http.ResponseWriter, subject string) {
+	t, resp, ok := ph.planSubject(w, subject)
 	if !ok {
 		return
 	}
-	resp.AdvisorReady, resp.Reason = a.planReady()
+	resp.AdvisorReady, resp.Reason = ph.planReady()
 	if !resp.AdvisorReady {
 		resp.Status = "disabled"
 		w.Header().Set("Content-Type", "application/json")
@@ -302,14 +321,14 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
-	context, err := a.planContext(t, resp.Playbook, resp.Labels.Similar)
+	context, err := ph.planContext(t, resp.Playbook, resp.Labels.Similar)
 	if err != nil {
 		http.Error(w, "Plan context unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
 	req := advisor.PlanRequest{SubjectID: subject, EvidenceKey: planEvidenceKey(t),
-		Context: context, Offered: a.offeredActions(t)}
-	if !a.plan.Enqueue(req) {
+		Context: context, Offered: ph.offeredActions(t)}
+	if !ph.plan.Enqueue(req) {
 		resp.Status, resp.AdvisorReady = "disabled", false
 		resp.Reason = "the advisor did not take the request: it is paused or its queue is full"
 		w.Header().Set("Content-Type", "application/json")
@@ -324,24 +343,24 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 }
 
 // planFlag is the subject's flag with its title and explanation stamped.
-func (a *API) planFlag(t planTarget) *model.Flag {
+func (ph *planHandlers) planFlag(t planTarget) *model.Flag {
 	if t.flag == nil {
 		return nil
 	}
 	f := *t.flag
 	f.Title = posture.HumanFlagTitle(f.Rule)
-	f.Explain = a.explainFlag(f, false)
+	f.Explain = ph.explain(f, false)
 	return &f
 }
 
 // offeredActions are the served action ids the plan may recommend: the
 // explained actions of the subject's flag.
-func (a *API) offeredActions(t planTarget) []string {
+func (ph *planHandlers) offeredActions(t planTarget) []string {
 	out := []string{}
 	if t.flag == nil {
 		return out
 	}
-	for _, act := range a.explainFlag(*t.flag, false).Actions {
+	for _, act := range ph.explain(*t.flag, false).Actions {
 		if !slices.Contains(out, act.ID) {
 			out = append(out, act.ID)
 		}
@@ -352,11 +371,11 @@ func (a *API) offeredActions(t planTarget) []string {
 // planContext renders the local context for one plan as labeled lines. It
 // holds evidence labels, the session, the masked excerpt, history, local
 // policy and the playbook; never a secret value.
-func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.OperatorLabel) ([]string, error) {
+func (ph *planHandlers) planContext(t planTarget, pb playbook.Playbook, labels []model.OperatorLabel) ([]string, error) {
 	var d7, d30 int
 	if t.rule != "" {
 		var err error
-		d7, d30, err = a.store.RuleCounts(t.rule, t.agent, time.Now())
+		d7, d30, err = ph.store.RuleCounts(t.rule, t.agent, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -370,7 +389,7 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 		add("agent: %s", t.agent)
 	}
 	if f := t.flag; f != nil {
-		ex := a.explainFlag(*f, false)
+		ex := ph.explain(*f, false)
 		add("finding: severity %d, raised %s, %s", f.Severity, f.TS.UTC().Format(time.RFC3339), ex.Disposition.Text)
 		if ex.What != "" {
 			add("what happened: %s", ex.What)
@@ -392,12 +411,12 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 		add("incident: %s, risk %s, %d flags aggregated, %s", inc.ID, inc.Risk, max(inc.AggregateCount, 1), inc.Summary)
 	}
 	if t.sessionID != "" {
-		if err := a.planSessionLines(t, add); err != nil {
+		if err := ph.planSessionLines(t, add); err != nil {
 			return nil, err
 		}
 	}
 	if t.path != "" {
-		d := a.fileDetail(t.path, t.findings, t.accesses)
+		d := ph.detail(t.path, t.findings, t.accesses)
 		cat := ""
 		if d.Subject != nil {
 			cat = d.Subject.CategoryLabel + ", " + d.Subject.OwnerLabel
@@ -419,9 +438,9 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 	if t.rule != "" {
 		add("history: rule %s fired %d times for this agent in the last 7 days, %d in 30 days", t.rule, d7, d30)
 	}
-	if a.mutes != nil {
+	if ph.mutes != nil {
 		var hosts []string
-		for _, m := range a.mutes.Load()[t.rule] {
+		for _, m := range ph.mutes.Load()[t.rule] {
 			if m.Agent == "" {
 				hosts = append(hosts, m.Host)
 			} else if m.Agent == t.agent {
@@ -432,8 +451,8 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 			add("local policy: flags of this rule are muted for %s", strings.Join(hosts, ", "))
 		}
 	}
-	if a.allowlist != nil && t.agent != "" {
-		if hosts := a.allowlist.Load()[t.agent]; len(hosts) > 0 {
+	if ph.allowlist != nil && t.agent != "" {
+		if hosts := ph.allowlist.Load()[t.agent]; len(hosts) > 0 {
 			add("local policy: hosts allowed for %s: %s", t.agent, strings.Join(hosts, ", "))
 		}
 	}
@@ -450,8 +469,8 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 
 // planSessionLines adds the session summary and the timeline leading up to
 // the finding.
-func (a *API) planSessionLines(t planTarget, add func(string, ...any)) error {
-	rep, ok, err := a.store.SessionReport(t.sessionID)
+func (ph *planHandlers) planSessionLines(t planTarget, add func(string, ...any)) error {
+	rep, ok, err := ph.store.SessionReport(t.sessionID)
 	if err != nil {
 		return err
 	}
