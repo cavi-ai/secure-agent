@@ -60,7 +60,6 @@ type Status posture.Status
 type StatusFunc func() Status
 
 type API struct {
-	classifierStatus   func(context.Context) advisor.ClassifierHealth
 	managedModelStatus func() *localservice.ManagedRuntime
 	modelServices      *modelservice.Manager
 	localInference     *inference.Monitor
@@ -105,6 +104,7 @@ type API struct {
 
 	guardHandlers
 	worktreeHandlers
+	sysAgentHandlers
 
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore
@@ -340,7 +340,6 @@ func New(d Deps) *API {
 		egressAdvisor:      d.Advisors.Egress,
 		clutter:            d.Workspace.Clutter,
 		sysAgent:           d.Workspace.SysAgent,
-		classifierStatus:   d.Workspace.ClassifierStatus,
 		managedModelStatus: d.Advisors.ManagedModel,
 		modelServices:      newServiceManager(d.ConfigPath),
 		localInference:     d.Inference,
@@ -400,6 +399,10 @@ func New(d Deps) *API {
 	a.worktreeHandlers.worktrees = d.Workspace.Worktrees
 	a.worktreeHandlers.store = d.Store
 	a.worktreeHandlers.openPath = a.openPath
+	a.sysAgentHandlers.classifierStatus = d.Workspace.ClassifierStatus
+	a.sysAgentHandlers.sysAgent = d.Workspace.SysAgent
+	a.sysAgentHandlers.store = d.Store
+	a.sysAgentHandlers.worktrees = d.Workspace.Worktrees
 	a.peerChk = d.Peers.Checker
 	a.guardHandlers.peerChk = d.Peers.Checker
 	if d.Peers.Checker != nil {

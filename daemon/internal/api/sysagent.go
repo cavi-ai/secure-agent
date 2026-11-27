@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,14 +28,24 @@ type AgentStatusResponse struct {
 	Classifier advisor.ClassifierHealth `json:"classifier"`
 }
 
+// sysAgentHandlers serves the system agent routes and builds the analysis
+// prompt, and holds only what those handlers use.
+type sysAgentHandlers struct {
+	classifierStatus func(context.Context) advisor.ClassifierHealth
+
+	sysAgent  *sysagent.Agent
+	store     *store.Store
+	worktrees *worktreehunter.Hunter
+}
+
 // handleAgentAnalyze builds the context on the daemon. The browser cannot
 // inject findings, alter history, or provide a command for this route.
-func (a *API) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	limitBody(w, r)
@@ -50,7 +61,7 @@ func (a *API) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "select at most 30 flags", http.StatusBadRequest)
 		return
 	}
-	flags, err := a.store.QueryFlags(store.FlagFilter{Limit: 30})
+	flags, err := h.store.QueryFlags(store.FlagFilter{Limit: 30})
 	if err != nil {
 		http.Error(w, "findings unavailable", http.StatusServiceUnavailable)
 		return
@@ -63,7 +74,7 @@ func (a *API) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[id] = true
-			f, ok := a.store.GetFlagWithAdvisor(id)
+			f, ok := h.store.GetFlagWithAdvisor(id)
 			if !ok {
 				http.Error(w, "selected flag not found", http.StatusNotFound)
 				return
@@ -72,8 +83,8 @@ func (a *API) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	prompt, ids := a.analysisPrompt(flags)
-	m, err := a.sysAgent.SendAnalysis(prompt, ids)
+	prompt, ids := h.analysisPrompt(flags)
+	m, err := h.sysAgent.SendAnalysis(prompt, ids)
 	if err != nil {
 		writeSysAgentError(w, err)
 		return
@@ -87,15 +98,15 @@ func (a *API) handleAgentAnalyze(w http.ResponseWriter, r *http.Request) {
 // every worktree of a repository ({"repo"}). The daemon rebuilds the
 // checker's facts (for a repository, from the cached report) and writes the
 // message itself; the browser supplies only the path.
-func (a *API) handleAgentWorktree(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentWorktree(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
-	if a.worktrees == nil {
+	if h.worktrees == nil {
 		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -105,11 +116,11 @@ func (a *API) handleAgentWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if repoPath != "" {
-		a.discussRepo(w, r, repoPath)
+		h.discussRepo(w, r, repoPath)
 		return
 	}
 	p = filepath.Clean(p)
-	req, err := a.worktrees.AdviceRequest(r.Context(), p)
+	req, err := h.worktrees.AdviceRequest(r.Context(), p)
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotWorktree):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -121,12 +132,12 @@ func (a *API) handleAgentWorktree(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	m, err := a.sysAgent.SendWorktree(worktreeQuestion(req), req.Path)
+	m, err := h.sysAgent.SendWorktree(worktreeQuestion(req), req.Path)
 	if err != nil {
 		writeSysAgentError(w, err)
 		return
 	}
-	_ = a.sysAgent.Remember(req.Path, "worktree-check", shortObservation("Recorded worktree check: "+req.State+"; branch "+req.Branch+". Recheck before removal.", 300), []string{"worktree:" + req.Path})
+	_ = h.sysAgent.Remember(req.Path, "worktree-check", shortObservation("Recorded worktree check: "+req.State+"; branch "+req.Branch+". Recheck before removal.", 300), []string{"worktree:" + req.Path})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{"message": m})
@@ -258,8 +269,8 @@ func worktreeGroupQuestion(repo worktreehunter.RepoReport, scanned time.Time) (s
 
 // discussRepo starts a conversation about every worktree of a repository in
 // the cached report.
-func (a *API) discussRepo(w http.ResponseWriter, r *http.Request, repoPath string) {
-	rep := a.worktrees.Report(r.Context(), false)
+func (h *sysAgentHandlers) discussRepo(w http.ResponseWriter, r *http.Request, repoPath string) {
+	rep := h.worktrees.Report(r.Context(), false)
 	repo, ok := reportRepo(rep, repoPath)
 	if !ok {
 		http.Error(w, "repository is not in the worktree report", http.StatusNotFound)
@@ -270,7 +281,7 @@ func (a *API) discussRepo(w http.ResponseWriter, r *http.Request, repoPath strin
 		http.Error(w, "the repository has no linked worktree to ask about", http.StatusConflict)
 		return
 	}
-	m, err := a.sysAgent.SendWorktree(question, repo.Path)
+	m, err := h.sysAgent.SendWorktree(question, repo.Path)
 	if err != nil {
 		writeSysAgentError(w, err)
 		return
@@ -289,9 +300,9 @@ var worktreeMergeVerdicts = map[string]bool{
 // analysisPrompt builds the review context for flags on the daemon: the
 // flags' structured evidence, recent behavior and operator actions. It
 // returns the prompt and the ids of the flags it carries.
-func (a *API) analysisPrompt(flags []model.Flag) (string, []string) {
-	events, eventErr := a.store.QueryEvents(store.EventFilter{Limit: 100})
-	audit := a.store.RecentAudit(20)
+func (h *sysAgentHandlers) analysisPrompt(flags []model.Flag) (string, []string) {
+	events, eventErr := h.store.QueryEvents(store.EventFilter{Limit: 100})
+	audit := h.store.RecentAudit(20)
 	var b strings.Builder
 	if eventErr != nil {
 		b.WriteString("Recent event evidence is unavailable. Do not infer that there was no activity.\n")
@@ -302,7 +313,7 @@ func (a *API) analysisPrompt(flags []model.Flag) (string, []string) {
 		if b.Len() > 4000 {
 			break
 		}
-		if full, ok := a.store.GetFlagWithAdvisor(f.ID); ok {
+		if full, ok := h.store.GetFlagWithAdvisor(f.ID); ok {
 			f = full
 		}
 		ids = append(ids, f.ID)
@@ -384,13 +395,13 @@ func shortObservation(s string, max int) string {
 	return string(r)
 }
 
-func (a *API) handleAgentRecommendations(w http.ResponseWriter, r *http.Request) {
-	if !a.sysAgentReady(w) {
+func (h *sysAgentHandlers) handleAgentRecommendations(w http.ResponseWriter, r *http.Request) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.sysAgent.Recommendations(100))
+		writeJSON(w, h.sysAgent.Recommendations(100))
 	case http.MethodPost:
 		limitBody(w, r)
 		var in struct {
@@ -401,7 +412,7 @@ func (a *API) handleAgentRecommendations(w http.ResponseWriter, r *http.Request)
 			http.Error(w, `Invalid payload: {"message_id", "state":"dismissed"}`, http.StatusBadRequest)
 			return
 		}
-		if err := a.sysAgent.SetRecommendationState(in.MessageID, in.State); err != nil {
+		if err := h.sysAgent.SetRecommendationState(in.MessageID, in.State); err != nil {
 			writeSysAgentError(w, err)
 			return
 		}
@@ -423,8 +434,8 @@ type AgentChat struct {
 }
 
 // sysAgentReady answers 503 when the daemon was built without the agent.
-func (a *API) sysAgentReady(w http.ResponseWriter) bool {
-	if a.sysAgent == nil {
+func (h *sysAgentHandlers) sysAgentReady(w http.ResponseWriter) bool {
+	if h.sysAgent == nil {
 		http.Error(w, "the system agent is not wired", http.StatusServiceUnavailable)
 		return false
 	}
@@ -447,28 +458,28 @@ func writeSysAgentError(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), code)
 }
 
-func (a *API) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
-	st := AgentStatusResponse{AgentStatus: a.sysAgent.Status(r.Context())}
-	if a.classifierStatus != nil {
-		st.Classifier = a.classifierStatus(r.Context())
+	st := AgentStatusResponse{AgentStatus: h.sysAgent.Status(r.Context())}
+	if h.classifierStatus != nil {
+		st.Classifier = h.classifierStatus(r.Context())
 	}
 	writeJSON(w, st)
 }
 
 // Agent controls are operator-only and never execute a model proposal.
-func (a *API) handleAgentControl(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentControl(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	limitBody(w, r)
@@ -483,7 +494,7 @@ func (a *API) handleAgentControl(w http.ResponseWriter, r *http.Request) {
 	}
 	switch in.Action {
 	case "stop":
-		a.sysAgent.Stop()
+		h.sysAgent.Stop()
 	case "pause":
 		localmodel.Default.PauseBackground(true)
 	case "resume":
@@ -495,16 +506,16 @@ func (a *API) handleAgentControl(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, localmodel.Default.Snapshot())
 }
 
-func (a *API) handleAgentMemory(w http.ResponseWriter, r *http.Request) {
-	if !a.sysAgentReady(w) {
+func (h *sysAgentHandlers) handleAgentMemory(w http.ResponseWriter, r *http.Request) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		s := a.sysAgent.Session()
-		writeJSON(w, map[string]any{"session": s, "sessions": a.sysAgent.Sessions(), "facts": a.sysAgent.Memory(s.Scope)})
+		s := h.sysAgent.Session()
+		writeJSON(w, map[string]any{"session": s, "sessions": h.sysAgent.Sessions(), "facts": h.sysAgent.Memory(s.Scope)})
 	case http.MethodDelete:
-		if err := a.sysAgent.ForgetMemory(); err != nil {
+		if err := h.sysAgent.ForgetMemory(); err != nil {
 			writeSysAgentError(w, err)
 			return
 		}
@@ -514,7 +525,7 @@ func (a *API) handleAgentMemory(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *API) handleAgentSkills(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -524,13 +535,13 @@ func (a *API) handleAgentSkills(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentChat: GET the conversation, POST a message (the reply lands
 // asynchronously; poll GET until chatting is false), DELETE clears it.
-func (a *API) handleAgentChat(w http.ResponseWriter, r *http.Request) {
-	if !a.sysAgentReady(w) {
+func (h *sysAgentHandlers) handleAgentChat(w http.ResponseWriter, r *http.Request) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, AgentChat{Messages: a.sysAgent.Messages(200), Chatting: a.sysAgent.Chatting(), Work: a.sysAgent.Work()})
+		writeJSON(w, AgentChat{Messages: h.sysAgent.Messages(200), Chatting: h.sysAgent.Chatting(), Work: h.sysAgent.Work()})
 	case http.MethodPost:
 		limitBody(w, r)
 		var in sysagent.ChatInput
@@ -538,7 +549,7 @@ func (a *API) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `Invalid payload: {"message", "harness", "workdir"}`, http.StatusBadRequest)
 			return
 		}
-		m, err := a.sysAgent.Send(in)
+		m, err := h.sysAgent.Send(in)
 		if err != nil {
 			writeSysAgentError(w, err)
 			return
@@ -547,7 +558,7 @@ func (a *API) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{"message": m})
 	case http.MethodDelete:
-		if err := a.sysAgent.Clear(); err != nil {
+		if err := h.sysAgent.Clear(); err != nil {
 			writeSysAgentError(w, err)
 			return
 		}
@@ -559,13 +570,13 @@ func (a *API) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentPlans: GET plans with their readiness, POST saves one (new,
 // from a reply's proposal, or an edit), DELETE ?id= removes one.
-func (a *API) handleAgentPlans(w http.ResponseWriter, r *http.Request) {
-	if !a.sysAgentReady(w) {
+func (h *sysAgentHandlers) handleAgentPlans(w http.ResponseWriter, r *http.Request) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, a.sysAgent.Plans(r.Context(), 200))
+		writeJSON(w, h.sysAgent.Plans(r.Context(), 200))
 	case http.MethodPost:
 		limitBody(w, r)
 		var in sysagent.PlanInput
@@ -573,7 +584,7 @@ func (a *API) handleAgentPlans(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `Invalid payload: {"id"|"message_id", "title", "harness", "mode", "workdir", "task", "steps", "skills", "model"}`, http.StatusBadRequest)
 			return
 		}
-		p, err := a.sysAgent.SavePlan(in)
+		p, err := h.sysAgent.SavePlan(in)
 		if err != nil {
 			writeSysAgentError(w, err)
 			return
@@ -585,7 +596,7 @@ func (a *API) handleAgentPlans(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "id must be a plan id", http.StatusBadRequest)
 			return
 		}
-		if err := a.sysAgent.DeletePlan(id); err != nil {
+		if err := h.sysAgent.DeletePlan(id); err != nil {
 			writeSysAgentError(w, err)
 			return
 		}
@@ -597,12 +608,12 @@ func (a *API) handleAgentPlans(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentDispatch runs a plan's harness: headless (202, poll
 // /agent/runs) or in a terminal.
-func (a *API) handleAgentDispatch(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentDispatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	limitBody(w, r)
@@ -611,7 +622,7 @@ func (a *API) handleAgentDispatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"plan_id", "mode", "workdir", "model"}`, http.StatusBadRequest)
 		return
 	}
-	run, err := a.sysAgent.Dispatch(r.Context(), in)
+	run, err := h.sysAgent.Dispatch(r.Context(), in)
 	if err != nil {
 		writeSysAgentError(w, err)
 		return
@@ -621,25 +632,25 @@ func (a *API) handleAgentDispatch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"run": run})
 }
 
-func (a *API) handleAgentRuns(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentRuns(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
-	writeJSON(w, a.sysAgent.Runs(50))
+	writeJSON(w, h.sysAgent.Runs(50))
 }
 
 // handleAgentActions starts the exact local command in an assistant message.
 // The caller cannot provide command text or a replacement folder.
-func (a *API) handleAgentActions(w http.ResponseWriter, r *http.Request) {
+func (h *sysAgentHandlers) handleAgentActions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.sysAgentReady(w) {
+	if !h.sysAgentReady(w) {
 		return
 	}
 	limitBody(w, r)
@@ -650,7 +661,7 @@ func (a *API) handleAgentActions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"message_id"}`, http.StatusBadRequest)
 		return
 	}
-	run, err := a.sysAgent.RunLocal(in.MessageID)
+	run, err := h.sysAgent.RunLocal(in.MessageID)
 	if err != nil {
 		writeSysAgentError(w, err)
 		return
