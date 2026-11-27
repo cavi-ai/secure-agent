@@ -182,15 +182,16 @@ func (a *API) snapshotFrom(now time.Time, r snapshotReads, pf postureFlags) Snap
 	}
 	reviews := r.reviews
 	reviews.Reviews = slices.Clone(reviews.Reviews)
+	status := a.currentStatus()
 	return Snapshot{
-		Status:      a.currentStatus(),
+		Status:      status,
 		Flags:       flags,
 		Reviews:     reviews,
 		Patterns:    pf.patterns,
 		Routine:     pf.routine,
 		Incidents:   slices.Clone(r.incidents),
 		Events:      priceClassed(slices.Clone(r.events)),
-		Posture:     a.postureFrom(now, pf, failedReads, r.evidence),
+		Posture:     a.postureFromStatus(status, now, pf, failedReads, r.evidence),
 		Suggestions: slices.Clone(suggestions),
 		Mutes:       a.mutePairs(),
 		Sessions:    slices.Clone(r.sessions),

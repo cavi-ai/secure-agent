@@ -350,30 +350,28 @@ func (s *Store) RecentIncidents(limit int) (out []model.IncidentReport, readErr 
 	if err != nil {
 		return nil, err
 	}
-	for i := range list {
-		if err := attachIncidentRemediation(tx, &list[i]); err != nil {
-			return nil, err
-		}
-	}
 	tx.Rollback()
 	s.attachNarratives(list)
 	return list, nil
 }
 
 // Include NULL status so an unreadable workflow cannot silently hide a report.
-var recentIncidentsQuery = `SELECT id, report_json FROM incidents WHERE (status IS NULL OR status != 'resolved') ORDER BY ` + timestampOrderExpr("created_at") + ` DESC, id DESC LIMIT ?`
+var recentIncidentsQuery = `SELECT id, report_json, COALESCE(remediation_json, '') FROM incidents WHERE (status IS NULL OR status != 'resolved') ORDER BY ` + timestampOrderExpr("created_at") + ` DESC, id DESC LIMIT ?`
 
 func scanIncidentsResult(rows *sql.Rows) ([]model.IncidentReport, error) {
 	defer rows.Close()
 
 	list := []model.IncidentReport{}
 	for rows.Next() {
-		var id, reportJSON string
-		if err := rows.Scan(&id, &reportJSON); err != nil {
+		var id, reportJSON, remediationJSON string
+		if err := rows.Scan(&id, &reportJSON, &remediationJSON); err != nil {
 			return nil, err
 		}
 		inc, err := decodeIncidentReport(id, reportJSON)
 		if err != nil {
+			return nil, err
+		}
+		if _, err := projectIncidentRemediation(inc, remediationJSON); err != nil {
 			return nil, err
 		}
 		list = append(list, *inc)

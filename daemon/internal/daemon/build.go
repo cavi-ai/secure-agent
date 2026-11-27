@@ -88,6 +88,10 @@ type Components struct {
 	// run persists this run's record: running marker, stop intent, ending.
 	run *RunTracker
 
+	// initialPPID is captured at Build start so an owning app exit during
+	// startup still triggers WaitForShutdown.
+	initialPPID int
+
 	cancel       context.CancelFunc
 	shutdownOnce sync.Once
 }
@@ -198,12 +202,13 @@ type buildState struct {
 // newBuildState refuses a bundled parent without its process version, then
 // creates the cancelable context and the Components that Shutdown releases.
 func newBuildState(parent context.Context, cfg config.Config, opts Options) (*buildState, error) {
+	initialPPID := os.Getppid()
 	uiPID := owningUIPID()
 	if uiPID > 0 && opts.OwnerPIDVersion == 0 {
 		return nil, errors.New("owning app process instance is required")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
+	c := &Components{cfg: cfg, initialPPID: initialPPID, cancel: cancel, apiErrors: make(chan error, 1)}
 	return &buildState{cfg: cfg, opts: opts, uiPID: uiPID, ctx: ctx, c: c}, nil
 }
 
@@ -736,7 +741,13 @@ func (s *buildState) launchCollectors() {
 // background process after its owner is gone. watchParentExit returns nil when
 // launched directly by pid 1 (no owning parent to outlive).
 func (c *Components) WaitForShutdown(ctx context.Context) error {
-	return c.waitForStop(ctx, watchParentExit(os.Getppid()))
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ppid := c.initialPPID
+	if ppid == 0 {
+		ppid = os.Getppid()
+	}
+	return c.waitForStop(ctx, watchParentExit(watchCtx, ppid))
 }
 
 // waitForStop blocks until a stop trigger fires (ctx is the signal context),

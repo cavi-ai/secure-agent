@@ -385,6 +385,12 @@ func New(d Deps) *API {
 	a.guardHandlers.emitEvent = a.publishGuardEvent
 	a.guardHandlers.saveLabel = a.recordLabel
 	a.guardHandlers.replyProbe = a.answerCoverageProbe
+	a.guardHandlers.serverDone = func() bool {
+		a.groupAdviseMu.Lock()
+		life := a.life
+		a.groupAdviseMu.Unlock()
+		return life != nil && life.Err() != nil
+	}
 	if a.tcpClientPID == nil {
 		a.tcpClientPID = TCPClientPID
 	}
@@ -801,6 +807,9 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.SessionFilter{Status: q.Get("status"), Harness: q.Get("harness"), Repo: q.Get("repo"), Branch: q.Get("branch")}
 	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		if n > 1000 {
+			n = 1000
+		}
 		f.Limit = n
 	}
 	if v := q.Get("since"); v != "" {

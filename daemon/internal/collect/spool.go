@@ -639,6 +639,9 @@ func (t *SpoolTailer) poll(c spoolCursor) spoolCursor {
 		return c
 	}
 	offset, file := t.drainOnce(t.path, c.offset)
+	if file == nil {
+		return c
+	}
 	return spoolCursor{offset: offset, size: st.Size(), mod: st.ModTime(), file: file}
 }
 

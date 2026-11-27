@@ -60,6 +60,7 @@ function createConsoleLifecycle({ store, state, actions }) {
     actions.clearInterval(state.sparkTimer);
     actions.clearTimeout(state.spendPollTimer);
     state.spendPollTimer = null;
+    actions.stopBackgroundPolls?.();
     state.spendDayGen++;
     state.spendGen++; // invalidate spend responses already in flight
     state.sessionWorkbench.invalidate();

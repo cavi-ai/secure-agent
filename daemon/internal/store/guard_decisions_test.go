@@ -147,3 +147,63 @@ func TestGuardDecisionDeadlineIsProductionOnly(t *testing.T) {
 		t.Fatalf("rows = %+v, want only the fixture row", rows)
 	}
 }
+
+func TestGuardPathAllowCleansPathsAndMatchesRoot(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "guard-allow.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.PutGuardPathAllow(GuardPathAllow{Agent: "antigravity", RuleID: "ssh-keys", Path: "/Users/dev/.ssh/"}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.GuardPathAllowed("antigravity", "ssh-keys", "/Users/dev/.ssh/id_ed25519") {
+		t.Fatal("trailing slash in stored guard_path_allows failed to match descendant")
+	}
+	if ok, err := s.DeleteGuardPathAllow("antigravity", "ssh-keys", "/Users/dev/.ssh/"); err != nil || !ok {
+		t.Fatalf("delete trailing slash path: ok=%v err=%v", ok, err)
+	}
+	if err := s.PutGuardPathAllow(GuardPathAllow{Agent: "antigravity", RuleID: "env-files", Path: "/"}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.GuardPathAllowed("antigravity", "env-files", "/tmp/.env") {
+		t.Fatal("root guard_path_allows failed to match descendant")
+	}
+}
+
+func TestDeleteGuardPathAllowRevokesLegacyAliases(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const agent, rule, path = "codex", "ssh-keys", "/project/.ssh"
+	// Older versions stored the operator's spelling verbatim.
+	if _, err := s.db.Exec(`INSERT INTO guard_path_allows (agent, rule_id, path, created_at) VALUES
+		('codex', 'ssh-keys', '/project//.ssh/', '2025-01-01T00:00:00Z'),
+		('codex', 'ssh-keys', '/project/sub/../.ssh', '2025-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, allow := range []GuardPathAllow{
+		{Agent: agent, RuleID: rule, Path: path},
+		{Agent: agent, RuleID: rule, Path: "/project/.ssh-other"},
+		{Agent: "claude", RuleID: rule, Path: path},
+	} {
+		if err := s.PutGuardPathAllow(allow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if removed, err := s.DeleteGuardPathAllow(agent, rule, path); err != nil || !removed {
+		t.Fatalf("revoke canonical path: removed=%t err=%v", removed, err)
+	}
+	if s.GuardPathAllowed(agent, rule, "/project/.ssh/config") {
+		t.Fatal("a revoked exception still allows access through a legacy alias")
+	}
+	if !s.GuardPathAllowed(agent, rule, "/project/.ssh-other/config") ||
+		!s.GuardPathAllowed("claude", rule, "/project/.ssh/config") {
+		t.Fatal("revoking one exception disturbed an unrelated allow")
+	}
+	if removed, err := s.DeleteGuardPathAllow(agent, rule, path); err != nil || removed {
+		t.Fatalf("repeat revocation: removed=%t err=%v", removed, err)
+	}
+}

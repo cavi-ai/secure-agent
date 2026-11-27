@@ -405,6 +405,17 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       actions: {
         clearGuardResult: () => guardDecisions.clear(),
+        stopBackgroundPolls: () => {
+          clearTimeout(agentPollTimer);
+          agentPollTimer = null;
+          agentState.polls = 0;
+          for (const timer of planPolls.values()) clearTimeout(timer);
+          planPolls.clear();
+          planFlagCache.clear();
+          planResponseCache.clear();
+          instructionRequests.clear();
+          worktreeController?.stop?.();
+        },
         get closeDrawer() { return detailDrawer.close; },
         get apiFetch() { return apiFetch; },
         clearInterval: (...args) => window.clearInterval(...args),
@@ -502,6 +513,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (generation !== handoffGeneration) return;
     sessionEnded = false;
+    const openPlans = new Set();
+    document.querySelectorAll('.plan-slot[data-plan-subject]').forEach(slot => {
+      openPlans.add(slot.dataset.planSubject);
+      slot.innerHTML = '<div class="loading-spinner">Loading the playbook…</div>';
+    });
+    for (const subject of openPlans) loadPlanSlot(subject);
     document.body.classList.remove('is-ended', 'is-paused');
     document.getElementById('session-ended').hidden = true;
     for (const [el, previous] of pausedElements) {
@@ -753,15 +770,26 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   syncNavigationLayout();
   compactNavigation.addEventListener?.('change', syncNavigationLayout);
+  let tabsStuckFrame = 0;
+  let lastTabsStuck = null;
   function syncTabsStuck() {
     if (!tabsBar) return;
     const stuck = window.scrollY > 0 && tabsBar.getBoundingClientRect().top <= 0;
+    if (stuck === lastTabsStuck) return;
+    lastTabsStuck = stuck;
     tabsBar.classList.toggle('is-stuck', stuck);
     const pill = document.getElementById('tabs-posture');
     if (pill) pill.hidden = !stuck;
   }
-  window.addEventListener('scroll', syncTabsStuck, { passive: true });
-  window.addEventListener('resize', syncTabsStuck);
+  function scheduleSyncTabsStuck() {
+    if (tabsStuckFrame) return;
+    tabsStuckFrame = window.requestAnimationFrame(() => {
+      tabsStuckFrame = 0;
+      syncTabsStuck();
+    });
+  }
+  window.addEventListener('scroll', scheduleSyncTabsStuck, { passive: true });
+  window.addEventListener('resize', scheduleSyncTabsStuck);
 
   function flashFirewallPanel() {
     if (reducedMotion) return;
@@ -1178,7 +1206,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (summary) {
         hookDiagnostic = { text: summary, seq, auth, busy: false };
         drawerBody.insertAdjacentHTML('beforeend', hookDiagnosticPreviewHTML(summary));
-        document.querySelector('#drawer-foot [data-action="hook-diagnostic-copy"]').disabled = false;
+        const copyButton = document.querySelector('#drawer-foot [data-action="hook-diagnostic-copy"]');
+        if (copyButton) copyButton.disabled = false;
       }
     } catch {
       if (current()) drawerBody.innerHTML=repair?hookRepairHTML(scope,null,'Verification unavailable. Check again; repair remains unconfirmed.'):'<p role="status">Hook evidence unavailable. Refresh to retry; recovery is unknown.</p>';
@@ -1543,6 +1572,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.sendAgentMessage = (...args) => agentControllerControllerModule().sendAgentMessage(...args);
   window.runLocalAgentAction = (...args) => agentControllerControllerModule().runLocalAgentAction(...args);
   function followAgent(wasBusy) {
+    if (sessionEnded) return;
     if (!agentBusy()) {
       agentState.polls = 0;
       if (wasBusy) loadAgent(['chat', 'plans', 'runs', 'recommendations']);
@@ -1552,6 +1582,7 @@ document.addEventListener('DOMContentLoaded', () => {
     agentState.polls++;
     agentPollTimer = setTimeout(() => {
       agentPollTimer = null;
+      if (sessionEnded) return;
       loadAgent(agentState.chat && agentState.chat.chatting ? ['chat'] : ['runs']);
     }, AGENT_POLL_MS);
   }
@@ -2816,6 +2847,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!res.ok) throw new Error((await res.text()).trim() || 'Instruction update failed');
       const result = await res.json();
+      if (instructionRequests.get(subject) !== state) return;
       if (!result?.applied || result.path !== preview.path || result.instruction !== preview.instruction) throw new Error('The update could not be confirmed; inspect the instruction file before retrying.');
       const current = planResponseCache.get(subject);
       if (current?.instruction?.path === preview.path && current.instruction.instruction === preview.instruction) {
@@ -2823,15 +2855,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       showToast('Safety rule applied to ' + result.path, 'success');
     } catch (err) {
+      if (instructionRequests.get(subject) !== state) return;
       state.error = 'Could not confirm the update: ' + (err.message || err);
       const current = planResponseCache.get(subject);
       if (current?.instruction) current.instruction = { ...current.instruction, ready: false, reason: state.error };
       // Refresh the file revision without automatically repeating a write.
       await loadPlanSlot(subject);
     } finally {
-      state.busy = false;
-      const current = planResponseCache.get(subject);
-      if (current) paintPlanSlots(subject, current);
+      if (instructionRequests.get(subject) === state) {
+        state.busy = false;
+        const current = planResponseCache.get(subject);
+        if (current) paintPlanSlots(subject, current);
+      }
     }
   };
   async function fetchPlan(subject) {
@@ -2841,39 +2876,49 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function pollPlan(subject, tries = 0) {
     clearTimeout(planPolls.get(subject));
-    if (tries >= 30) return;
+    planPolls.delete(subject);
+    if (sessionEnded || tries >= 30) return;
+    const generation = handoffGeneration;
     planPolls.set(subject, setTimeout(async () => {
-      if (!planSlots(subject).length) return;
+      planPolls.delete(subject);
+      if (sessionEnded || generation !== handoffGeneration || !planSlots(subject).length) return;
       try {
         const resp = await fetchPlan(subject);
+        if (sessionEnded || generation !== handoffGeneration) return;
         paintPlanSlots(subject, resp);
         if (resp.status === 'pending') pollPlan(subject, tries + 1);
       } catch {
-        pollPlan(subject, tries + 1);
+        if (!sessionEnded && generation === handoffGeneration) pollPlan(subject, tries + 1);
       }
     }, 3000));
   }
   async function loadPlanSlot(subject) {
+    if (sessionEnded) return;
+    const generation = handoffGeneration;
     try {
       const resp = await fetchPlan(subject);
+      if (sessionEnded || generation !== handoffGeneration) return;
       paintPlanSlots(subject, resp);
       if (resp.status === 'pending') pollPlan(subject);
     } catch (err) {
+      if (sessionEnded || generation !== handoffGeneration) return;
       planSlots(subject).forEach(el => { el.innerHTML = html`<p class="plan-status">No playbook: ${err.message || err}</p>`; });
     }
   }
   window.askAdvisorPlan = async function(subject) {
+    const generation = handoffGeneration;
     try {
       const res = await apiFetch('/advisor/plan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subject })
       });
       const resp = await res.json().catch(() => null);
+      if (sessionEnded || generation !== handoffGeneration) return;
       if (resp) paintPlanSlots(subject, resp);
       if (res.status === 202) pollPlan(subject);
       else if (!res.ok) showToast((resp && resp.reason) || 'The advisor could not take the request', 'info');
     } catch (err) {
-      showToast(`Could not ask the advisor: ${err.message || err}`, 'error');
+      if (!sessionEnded && generation === handoffGeneration) showToast(`Could not ask the advisor: ${err.message || err}`, 'error');
     }
   };
   // Operator labels: Mark as routine / Mark as not ok, and the kill record.

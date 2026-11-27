@@ -409,6 +409,14 @@ public final class DaemonClient: Sendable {
             }
             defer { Darwin.close(fd) }
 
+            // Prevent SIGPIPE from killing the menu bar app if the daemon exits
+            // or restarts between connect and write on any request.
+            var noSigPipe: Int32 = 1
+            guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
+                             socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                throw DaemonClientError.transport("could not configure socket")
+            }
+
             // Send/recv timeouts: a wedged daemon that accepts but never answers
             // must not block this thread forever.
             var tv = timeval(tv_sec: DaemonClient.ioTimeoutSeconds, tv_usec: 0)
@@ -470,12 +478,6 @@ public final class DaemonClient: Sendable {
                       let peer = try? ProcessIdentity(auditToken: withUnsafeBytes(of: token) { Data($0) }),
                       peer == expectedPeer else {
                     throw DaemonClientError.transport("control socket is not served by the owned daemon")
-                }
-                // The child can exit after the peer check and before a write.
-                var noSigPipe: Int32 = 1
-                guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
-                                 socklen_t(MemoryLayout<Int32>.size)) == 0 else {
-                    throw DaemonClientError.transport("could not configure the stop intent socket")
                 }
             }
 

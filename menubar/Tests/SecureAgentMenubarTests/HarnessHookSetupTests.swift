@@ -140,8 +140,11 @@ final class HarnessHookSetupTests: XCTestCase {
         let window = makeWindow(controller)
         defer { window.close() }
         await settle(controller.view)
+        let finished = expectation(description: "Codex hook registration finished")
+        let observation = flow.$installing.dropFirst().filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
+        defer { observation.cancel() }
         try pressReturn(window)
-        await settle(controller.view)
+        await fulfillment(of: [finished], timeout: 10)
         XCTAssertEqual(flow.stage, .result)
         XCTAssertNil(fixture.setup.lastError)
         XCTAssertTrue(HookRegistry.selectedHooksInstalled(harness: "codex", home: fixture.home))

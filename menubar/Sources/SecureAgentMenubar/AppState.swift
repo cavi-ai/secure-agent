@@ -191,6 +191,9 @@ public final class AppState: ObservableObject {
                     return // old daemon: polling carries the session
                 } catch {
                     guard !Task.isCancelled else { return }
+                    if self.streamLive {
+                        backoff = 1_000_000_000
+                    }
                     self.streamDidFail()
                     try? await Task.sleep(nanoseconds: backoff)
                     // ±20% jitter so reconnects don't phase-lock.
@@ -258,9 +261,10 @@ public final class AppState: ObservableObject {
             if !immediately, let delay = self?.streamDebounceNanos, delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
-            guard !Task.isCancelled, let self, !self.isPaused else { return }
-            let need = self.pendingStreamRefresh
+            guard !Task.isCancelled, let self else { return }
+            let need = self.isPaused ? self.pendingStreamRefresh.intersection([.guardPending]) : self.pendingStreamRefresh
             self.pendingStreamRefresh = []
+            guard !need.isEmpty else { return }
             await self.lightRefresh(need)
         }
     }
@@ -301,13 +305,21 @@ public final class AppState: ObservableObject {
     }
 
     /// Refresh when review, evidence, risk or advice changes for the same ID.
-    static func flagsSignature(_ flags: [FlagModel]) -> [String] {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        return flags.map {
-            let assessment = $0.explain?.assessment
-            let encoded = assessment.flatMap { try? encoder.encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
-            return "\($0.id)|\($0.acknowledged == true)|\($0.explain?.disposition.state ?? "")|\(encoded)"
+    struct FlagSignature: Equatable {
+        let id: String
+        let acknowledged: Bool
+        let dispositionState: String
+        let assessment: FindingAssessmentModel?
+    }
+
+    static func flagsSignature(_ flags: [FlagModel]) -> [FlagSignature] {
+        flags.map {
+            FlagSignature(
+                id: $0.id,
+                acknowledged: $0.acknowledged == true,
+                dispositionState: $0.explain?.disposition.state ?? "",
+                assessment: $0.explain?.assessment
+            )
         }
     }
 
@@ -417,10 +429,10 @@ public final class AppState: ObservableObject {
             // fail-open on the security-critical path.
             do {
                 let pending = try await refreshSection(.guardDecisions) { try await client.fetchGuardPending() }
-                guard !self.isPaused else { return }
 				self.lastError = staleDataWarning
 				self.onChange?()
                 // Presented last; the alert itself runs in its own task.
+                // Service pending consent even if pause flipped mid-flight.
                 self.presentGuardPromptIfNeeded(pending)
             } catch {
                 self.lastError = "guard check failed: \(error.localizedDescription)"
@@ -648,6 +660,11 @@ public final class AppState: ObservableObject {
         refreshTask?.cancel()
         timer?.invalidate()
         timer = nil
+        if nativePromptID != nil || promptingID != nil {
+            nativePromptID = nil
+            promptingID = nil
+            withdrawGuardAlert()
+        }
     }
 
     // MARK: - Weekly digest
@@ -681,16 +698,17 @@ public final class AppState: ObservableObject {
         return "\(flags7d) \(flag) · \(blockedLeaks) \(leak) · \(approvals) \(approval) · \(openIncidents) \(incident)"
     }
 
-    private var digestCheckedThisWeek = false
+    private var lastDigestWeekKey: String?
 
     /// Called from performFetch after a successful status update: if it's
     /// Monday 09:00 and the digest hasn't gone out this ISO week, send it.
     func maybeSendWeeklyDigest(now: Date = Date()) async {
         let defaults = AppPreferences.shared
+        let weekKey = Self.currentWeekKey(now: now)
         let lastKey = defaults.string(forKey: "weeklyDigestLastWeek")
-        guard Self.shouldSendWeeklyDigest(now: now, lastSentWeek: lastKey), !digestCheckedThisWeek else { return }
-        digestCheckedThisWeek = true
-        defaults.set(Self.currentWeekKey(now: now), forKey: "weeklyDigestLastWeek")
+        guard Self.shouldSendWeeklyDigest(now: now, lastSentWeek: lastKey), lastDigestWeekKey != weekKey else { return }
+        lastDigestWeekKey = weekKey
+        defaults.set(weekKey, forKey: "weeklyDigestLastWeek")
 
         let rollup = (try? await client.fetchRollup(hours: 168)) ?? []
         var flags7d = 0
@@ -698,7 +716,7 @@ public final class AppState: ObservableObject {
         let blocked = (status?.firewallStats ?? [:]).values.reduce(0) { $0 + $1.blocked }
         let weekAgo = now.addingTimeInterval(-7 * 86400)
         let approvals = ((try? await client.fetchAudit(limit: 50)) ?? []).filter {
-            $0.action == "allowlist-add" && (ISO8601DateFormatter().date(from: $0.ts) ?? .distantPast) > weekAgo
+            $0.action == "allowlist-add" && (EventTime.parse($0.ts) ?? .distantPast) > weekAgo
         }.count
         let openIncidents = unresolvedIncidents.count
         sendDigest(Self.weeklyDigestText(flags7d: flags7d, blockedLeaks: blocked, approvals: approvals, openIncidents: openIncidents))

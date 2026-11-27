@@ -85,8 +85,13 @@ func main() {
 		defer headless.Release()
 	}
 
+	daemonCtx := ctx
+	if headless != nil {
+		// Let Shutdown cancel the control API after the hook lease is released.
+		daemonCtx = context.WithoutCancel(ctx)
+	}
 	// Build starts collectors and servers only after socket ownership is held.
-	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed, ConfigOverlayErr: overlayErr, OwnerPIDVersion: uint32(*ownerPIDVersion)})
+	comps, err := daemon.Build(daemonCtx, cfg, daemon.Options{ConfigPath: configPathUsed, ConfigOverlayErr: overlayErr, OwnerPIDVersion: uint32(*ownerPIDVersion)})
 	if err != nil {
 		log.Fatalf("failed to start daemon: %v", err)
 	}
@@ -100,6 +105,11 @@ func main() {
 
 	// Exit when the owning parent (the menubar app) goes away, or on a signal.
 	runErr := comps.WaitForShutdown(ctx)
+	// Release the headless lease before draining collectors/sinks so hooks
+	// disengage immediately instead of blocking against a shutting-down daemon.
+	if headless != nil {
+		headless.Release()
+	}
 	comps.Shutdown()
 	if runErr != nil {
 		log.Fatalf("daemon stopped: %v", runErr)

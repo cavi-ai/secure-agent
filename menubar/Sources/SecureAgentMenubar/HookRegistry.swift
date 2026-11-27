@@ -235,17 +235,18 @@ enum HookRegistry {
 
     /// Overwrites each installed hook whose SHA-256 differs from the bundled
     /// copy and creates missing ones; identical files are left untouched.
+    /// Uses atomic writes so running hooks never see a deleted or partial file.
     /// Returns the names written.
     @discardableResult
     static func refreshInstalledHooks(bundledDir: String, installedDir: String) throws -> [String] {
-        let fm = FileManager.default
         var refreshed: [String] = []
         for hook in try hookFileNames(in: bundledDir).sorted() {
             let src = "\(bundledDir)/\(hook)"
             let dst = "\(installedDir)/\(hook)"
-            if let installed = fileSHA256(dst), installed == fileSHA256(src) { continue }
-            if fm.fileExists(atPath: dst) { try fm.removeItem(atPath: dst) }
-            try fm.copyItem(atPath: src, toPath: dst)
+            let data = try Data(contentsOf: URL(fileURLWithPath: src))
+            let srcHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            if let installed = fileSHA256(dst), installed == srcHash { continue }
+            try data.write(to: URL(fileURLWithPath: dst), options: .atomic)
             refreshed.append(hook)
         }
         return refreshed

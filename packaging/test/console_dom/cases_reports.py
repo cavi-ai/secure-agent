@@ -3741,6 +3741,14 @@ def run_empty_posture(page):
         ),
     )
 
+def run_playbook_reconnect(page):
+    dom = page.dom('', served=True, fixture={'script': 'cases_playbook_reconnect.js'})
+    receipt = re.search(r'data-playbook-reconnect="([^"]+)"', dom)
+    state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+    for name in ('initial', 'paused', 'resumed', 'refreshed', 'staleHidden', 'applied'):
+        page.check(f'playbook reconnect: {name}', state.get(name) is True, str(state))
+
+
 def run_auth_recovery(page):
     check = page.check
     for label, query, size in [('memory', '?authrecover&authhistory', (1280, 800)), ('trace', '?authrecover&authtrace', (900, 768))]:
@@ -4033,4 +4041,5 @@ CASES = (
     Case('bulk_mark_reviewed_on_two_selected_rows_asks_one_confirm_and_sends_one_acknowledge_batch', run_bulk_mark_reviewed_on_two_selected_rows_asks_one_confirm_and_sends_one_acknowledge_batch, ('dom_bulk',)),
     Case('empty_posture', run_empty_posture, ('dom_empty',)),
     Case('auth_recovery', run_auth_recovery, ()),
+    Case('playbook_reconnect', run_playbook_reconnect),
 )

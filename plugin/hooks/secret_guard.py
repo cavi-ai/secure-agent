@@ -352,11 +352,12 @@ def norm(token: str) -> str:
 
 def is_shell_rc(token: str) -> bool:
     p = norm(token)
-    if any(p.startswith(pre) for pre in SYSTEM_RC_PREFIXES):
+    pl = p.lower()
+    if any(pl.startswith(pre) for pre in SYSTEM_RC_PREFIXES):
         return True
     # Case-folded: default macOS APFS is case-insensitive, so `~/.ZSHRC` IS
     # `~/.zshrc` on disk. A case-sensitive check is a write-through bypass.
-    return os.path.basename(p).lower() in SHELL_RC_NAMES
+    return os.path.basename(pl) in SHELL_RC_NAMES
 
 
 def is_keychain_path(token: str) -> bool:
@@ -370,9 +371,21 @@ def is_keychain_path(token: str) -> bool:
 GUARD_CONTROL_DIR = os.path.join(HOME, ".config", "secure-agent")
 
 
-def is_guard_control_path(token: str) -> bool:
+def _abs_lower(token: str) -> str:
     p = norm(token)
-    return p == GUARD_CONTROL_DIR or p.startswith(GUARD_CONTROL_DIR + os.sep)
+    if not p:
+        return ""
+    if not os.path.isabs(p):
+        p = os.path.normpath(os.path.join(_cwd_for_request(), p))
+    return p.lower()
+
+
+def is_guard_control_path(token: str) -> bool:
+    p = _abs_lower(token)
+    if not p:
+        return False
+    d = GUARD_CONTROL_DIR.lower()
+    return p == d or p.startswith(d + os.sep)
 
 
 # The daemon's evidence store, the hook activity log and the run record.
@@ -383,12 +396,9 @@ GUARD_STATE_REF_RE = re.compile(r"/\.local/state/secure-agent(?![\w-])", re.I)
 
 
 def is_guard_state_path(token: str) -> bool:
-    p = norm(token)
+    p = _abs_lower(token)
     if not p:
         return False
-    if not os.path.isabs(p):
-        p = os.path.normpath(os.path.join(_cwd_for_request(), p))
-    p = p.lower()
     d = GUARD_STATE_DIR.lower()
     return p == d or p.startswith(d + os.sep)
 
@@ -420,9 +430,11 @@ HARNESS_CONFIG_PATHS = (
 
 
 def is_harness_config_path(token: str) -> bool:
-    p = norm(token)
+    p = _abs_lower(token)
+    if not p:
+        return False
     for h in HARNESS_CONFIG_PATHS:
-        nh = norm(h)
+        nh = norm(h).lower()
         if p == nh or p.startswith(nh + os.sep):
             return True
     return False
@@ -481,7 +493,8 @@ def command_references_protected(command: str) -> bool:
         tokens = command.split()
     for tok in tokens:
         if (is_shell_rc(tok) or is_keychain_path(tok) or is_secret_file(tok)
-                or is_guard_control_path(tok) or is_protected_dir(tok)):
+                or is_guard_control_path(tok) or is_harness_config_path(tok)
+                or is_protected_dir(tok)):
             return True
     return False
 
@@ -531,10 +544,28 @@ def _load_json_file(path: str, sentinel):
         return sentinel
 
 
+_RULE_ID_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
+_UNIX_URL_RE = re.compile(r"https?://unix(/[^ \t]*)?$")
+_CONFIG_CACHE: dict[str, tuple[tuple[int, int, int] | None, object]] = {}
+
+
+def _stat_sig(path: str) -> tuple[int, int, int] | None:
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return None
+
+
 def _mode_overrides() -> dict:
     path = os.environ.get("SECURE_AGENT_GUARD_MODES") or os.path.join(HOME, ".config", "secure-agent", "guard-modes.json")
+    sig = _stat_sig(path)
+    cached = _CONFIG_CACHE.get(("modes", path))
+    if cached is not None and cached[0] == sig:
+        return cached[1]
     data = _load_json_file(path, {"*": "deny"})
     if data is None:
+        _CONFIG_CACHE[("modes", path)] = (sig, {})
         return {}
     if not isinstance(data, dict):
         try:
@@ -542,7 +573,10 @@ def _mode_overrides() -> dict:
         except Exception:
             pass
         return {"*": "deny"}
-    return {str(k): str(v) for k, v in data.items()}
+    result = {str(k): str(v) for k, v in data.items()}
+    if "*" not in result:
+        _CONFIG_CACHE[("modes", path)] = (sig, result)
+    return result
 
 
 def _effective_guard_doc():
@@ -550,11 +584,16 @@ def _effective_guard_doc():
     path = os.environ.get("SECURE_AGENT_GUARD_RULES") or os.path.join(
         os.path.dirname(os.environ.get("SECURE_AGENT_SOCK") or os.path.join(
             HOME, ".config", "secure-agent", "daemon.sock")), "guard-rules.json")
+    sig = _stat_sig(path)
+    cached = _CONFIG_CACHE.get(("rules", path))
+    if cached is not None and cached[0] == sig:
+        return cached[1]
     sentinel = {"rules": [{"id": "guard-config-corrupt", "paths": ["*"], "mode": "deny"}],
                 "dir_scan": [[os.sep, "guard-config-corrupt"]]}
     data = _load_json_file(path, sentinel)
     if data is None:
         if not os.path.exists(path):
+            _CONFIG_CACHE[("rules", path)] = (sig, _GUARD_DOC)
             return _GUARD_DOC
         audit("deny", "guard-config-corrupt", path, "config")
         return sentinel
@@ -566,7 +605,7 @@ def _effective_guard_doc():
         seen = set()
         for rule in data["rules"]:
             rid = rule["id"]
-            if not isinstance(rid, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", rid) or rid in seen:
+            if not isinstance(rid, str) or not _RULE_ID_RE.fullmatch(rid) or rid in seen:
                 raise ValueError("invalid rule ID")
             seen.add(rid)
             if rule["mode"] not in ("monitor", "prompt", "deny"):
@@ -579,6 +618,8 @@ def _effective_guard_doc():
         for pair in data["dir_scan"]:
             if not isinstance(pair, list) or len(pair) != 2 or not isinstance(pair[0], str) or not pair[0] or pair[1] not in seen:
                 raise ValueError("invalid directory rule")
+        if data is not sentinel:
+            _CONFIG_CACHE[("rules", path)] = (sig, data)
         return data
     except (KeyError, TypeError, ValueError):
         audit("deny", "guard-config-corrupt", path, "config")
@@ -592,15 +633,23 @@ def _cwd_overrides() -> list:
     global override for that entry only."""
     path = os.environ.get("SECURE_AGENT_GUARD_CWD_OVERRIDES") or os.path.join(
         HOME, ".config", "secure-agent", "guard-cwd-overrides.json")
-    data = _load_json_file(path, [{"cwd_prefix": os.sep, "rules": {"*": "deny"}}])
+    sig = _stat_sig(path)
+    cached = _CONFIG_CACHE.get(("cwd", path))
+    if cached is not None and cached[0] == sig:
+        return cached[1]
+    sentinel = [{"cwd_prefix": os.sep, "rules": {"*": "deny"}}]
+    data = _load_json_file(path, sentinel)
     if data is None:
+        _CONFIG_CACHE[("cwd", path)] = (sig, [])
         return []
     if not isinstance(data, list):
         try:
             audit("deny", "guard-config-corrupt", path, "config")
         except Exception:
             pass
-        return [{"cwd_prefix": os.sep, "rules": {"*": "deny"}}]
+        return sentinel
+    if data is not sentinel:
+        _CONFIG_CACHE[("cwd", path)] = (sig, data)
     return data
 
 
@@ -931,8 +980,8 @@ def hook_inactive(socket_connected: bool = False) -> bool:
 
 def quiet_exit() -> None:
     event = str(_PAYLOAD.get("hook_event_name") or _PAYLOAD.get("event") or "")
-    native_cursor_pre = runtime() == "cursor" and event not in ("PostToolUse", "postToolUse")
-    emit({"permission": "allow"} if native_cursor_pre or runtime() in ("codex", "openclaw", "hermes", "opencode", "antigravity") else {})
+    is_post = event in ("PostToolUse", "postToolUse")
+    emit({"permission": "allow"} if not is_post and runtime() in ("cursor", "codex", "openclaw", "hermes", "opencode", "antigravity") else {})
     sys.exit(0)
 
 
@@ -1761,6 +1810,8 @@ def gate_untrusted_egress(tool: str, tool_input: dict, command: str, event: str)
     read = "; ".join(([f"an injection in {injection['location']} ({injection['match']})"] if injection else [])
                      + [source_phrase(s) for s in sources[:3]])
     detail = f"This session read untrusted content: {read}. It now sends data out: {target}."[:600]
+    if hook_inactive():
+        quiet_exit()
     d = _guard_query(runtime(), tool or "Bash", target, EGRESS_RULE, PROMPT_DEADLINE_S,
                      _cwd_for_request(), detail=detail, categories=categories,
                      category_mode="session" if mode == "session" else "")
@@ -2113,32 +2164,42 @@ def rule_guard_control_network(seg: SegmentContext) -> Verdict | None:
     argv, name = seg.argv, seg.name
     if name in NETWORK_CLIENTS:
         toks = [os.path.expandvars(os.path.expanduser(t)) for t in argv[1:]]
-        url_path = None
+        unix_urls = []
+        other_urls = []
         for t in toks:
-            m = re.match(r"https?://unix(/[^ \t]*)?$", t)
+            m = _UNIX_URL_RE.match(t)
             if m:
-                url_path = m.group(1) or "/"
-                break
+                unix_urls.append(m.group(1) or "/")
+            elif t.startswith(("http://", "https://")):
+                other_urls.append(t)
         sock_real = os.path.realpath(SOCK_PATH)
         hits_sock = any(
             not t.startswith("-") and os.path.realpath(t) == sock_real
             for t in toks
         )
         guard_url = any("/guard/" in t for t in toks)
-        if url_path is not None or hits_sock or guard_url:
+        if unix_urls or hits_sock or guard_url:
             write_verbs = {"-d", "--data", "--data-binary", "--data-raw",
-                           "--data-ascii", "-F", "--form", "--json",
-                           "-T", "--upload-file"}
+                           "--data-ascii", "--data-urlencode", "-F", "--form",
+                           "--form-string", "--json", "-T", "--upload-file"}
+            write_prefixes = ("--data=", "--data-binary=", "--data-raw=",
+                              "--data-ascii=", "--data-urlencode=", "--form=",
+                              "--form-string=", "--json=", "--upload-file=")
             read_only = True
             for i, t in enumerate(argv[1:]):
-                if t in write_verbs:
+                if (t in write_verbs or t.startswith(write_prefixes)
+                        or (t.startswith(("-d", "-F", "-T")) and len(t) > 2)):
                     read_only = False
-                elif t in ("-X", "--request") and i + 2 <= len(argv) and argv[i + 2].upper() != "GET":
+                elif t in ("-X", "--request"):
+                    if i + 2 >= len(argv) or argv[i + 2].upper() != "GET":
+                        read_only = False
+                elif t.startswith("--request=") and t.split("=", 1)[1].upper() != "GET":
                     read_only = False
                 elif t.startswith("-X") and len(t) > 2 and t[2:].upper() != "GET":
                     read_only = False
-            sanctioned = (not guard_url and read_only
-                          and url_path in READONLY_SOCKET_PATHS)
+            sanctioned = (not guard_url and read_only and not other_urls
+                          and len(unix_urls) == 1
+                          and unix_urls[0] in READONLY_SOCKET_PATHS)
             if not sanctioned:
                 return denied(
                     "guard-control-network",
@@ -2470,9 +2531,19 @@ def rule_interpreter_write(seg: SegmentContext) -> Verdict | None:
             low = tok.lower()
             names_protected = (
                 is_shell_rc(tok) or is_keychain_path(tok) or is_secret_file(tok)
+                or is_guard_control_path(tok) or is_harness_config_path(tok)
                 or any(
                     marker.lower() in low
-                    for marker in list(SHELL_RC_NAMES) + list(KEYCHAIN_MARKERS) + ["credentials/"]
+                    for marker in list(SHELL_RC_NAMES) + list(KEYCHAIN_MARKERS) + [
+                        "credentials/", ".config/secure-agent",
+                        ".claude/settings", ".claude/hooks",
+                        ".cursor/hooks", ".codex/hooks", ".codex/config.toml",
+                        ".openclaw/extensions/secure-agent", ".openclaw/openclaw.json",
+                        ".gemini/config/hooks.json", ".gemini/secure-agent/hooks",
+                        ".hermes/config.yaml", ".hermes/plugins/secure-agent",
+                        ".config/opencode/plugins/secure-agent", ".config/opencode/opencode.json",
+                        ".config/opencode/hooks",
+                    ]
                 )
             )
             if names_protected:
@@ -2858,6 +2929,8 @@ def gate_image_text(tool: str, tool_input: dict, event: str) -> None:
     except OSError:
         return
     hit = next((r for r in image_text(path) if scan_text(r["text"])), None)
+    if hook_inactive():
+        quiet_exit()
     if hit is None:
         return
     text = _clip(hit["text"], 200)

@@ -914,20 +914,30 @@ func fleetHeartbeatLoop(ctx context.Context, push func() string, stateFn func() 
 // watchParentExit returns a channel that closes when the daemon's owning
 // parent changes (i.e. the menu bar app died and we were reparented to
 // launchd). Returns nil when launched directly by pid 1 — no owning parent
-// to outlive, so no watch is needed.
-func watchParentExit(initialPPID int) <-chan struct{} {
+// to outlive, so no watch is needed. Exits cleanly when ctx is cancelled.
+func watchParentExit(ctx context.Context, initialPPID int) <-chan struct{} {
 	if initialPPID == 1 {
 		return nil
 	}
 	parentGone := make(chan struct{})
+	if os.Getppid() != initialPPID {
+		log.Printf("secure-agentd: owning parent (pid %d) exited during startup; shutting down", initialPPID)
+		close(parentGone)
+		return parentGone
+	}
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			if os.Getppid() != initialPPID {
-				log.Printf("secure-agentd: owning parent (pid %d) exited; shutting down", initialPPID)
-				close(parentGone)
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case <-ticker.C:
+				if os.Getppid() != initialPPID {
+					log.Printf("secure-agentd: owning parent (pid %d) exited; shutting down", initialPPID)
+					close(parentGone)
+					return
+				}
 			}
 		}
 	}()

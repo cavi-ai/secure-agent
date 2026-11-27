@@ -590,11 +590,22 @@ func (s *Store) recordEventActivityLocked(e event.Event) {
 // inside it: each statement takes mu on its own.
 func (s *Store) retain() {
 	s.PruneEvents()
+	s.pruneLastSeen(time.Now().Add(-24 * time.Hour))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneRollupLocked()
 	s.pruneSessionsLocked()
 	refreshPlannerStats(s.db)
+}
+
+func (s *Store) pruneLastSeen(cutoff time.Time) {
+	s.lastSeenMu.Lock()
+	defer s.lastSeenMu.Unlock()
+	for pid, ts := range s.lastSeen {
+		if ts.Before(cutoff) {
+			delete(s.lastSeen, pid)
+		}
+	}
 }
 
 // pruneBatch is the most rows one retention statement deletes, so no
@@ -1800,18 +1811,18 @@ func (s *Store) AdvisorVerdictResultFor(subjectID, kind string) (v model.Advisor
 	return s.advisorVerdictResult(subjectID, kind)
 }
 
-// attachNarratives joins advisor narratives onto incidents.
+// attachNarratives joins advisor narratives onto incidents in batched queries.
 func (s *Store) attachNarratives(list []model.IncidentReport) {
 	if len(list) == 0 {
 		return
 	}
-	var readErr error
+	ids := make([]string, len(list))
 	for i := range list {
-		v, ok, err := s.advisorVerdictResult(list[i].ID, "incident")
-		if readErr == nil {
-			readErr = err
-		}
-		if ok {
+		ids[i] = list[i].ID
+	}
+	verdicts, readErr := s.advisorVerdicts(ids, "incident")
+	for i := range list {
+		if v, ok := verdicts[list[i].ID]; ok {
 			list[i].AdvisorNarrative = v.Rationale
 		}
 	}
@@ -1836,7 +1847,9 @@ func (s *Store) PutAudit(a AuditEntry) {
 	if err != nil {
 		log.Printf("store: failed to insert audit %s: %v", a.Action, err)
 	}
-	_, _ = s.db.Exec(`DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT ?)`, maxAudit)
+	if maxAudit > 0 {
+		_, _ = s.db.Exec(`DELETE FROM audit WHERE id < (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET ?)`, maxAudit-1)
+	}
 }
 
 func (s *Store) RecentAudit(limit int) []AuditEntry {
@@ -2355,6 +2368,13 @@ type GuardPathAllow struct {
 	CreatedAt string `json:"created_at"`
 }
 
+func guardPathAllowKey(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
 // PutGuardPathAllow records one per-path allow (idempotent upsert).
 func (s *Store) PutGuardPathAllow(g GuardPathAllow) error {
 	s.mu.Lock()
@@ -2364,7 +2384,7 @@ func (s *Store) PutGuardPathAllow(g GuardPathAllow) error {
 		`INSERT INTO guard_path_allows (agent, rule_id, path, created_at)
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(agent, rule_id, path) DO UPDATE SET created_at=excluded.created_at`,
-		g.Agent, g.RuleID, g.Path, ts)
+		g.Agent, g.RuleID, guardPathAllowKey(g.Path), ts)
 	if err != nil {
 		log.Printf("store: put guard_path_allows error: %v", err)
 	}
@@ -2389,7 +2409,8 @@ func (s *Store) guardPathAllowed(agent, ruleID, path string) bool {
 		if err := rows.Scan(&allowed); err != nil {
 			continue
 		}
-		if path == allowed || (len(path) > len(allowed) && path[:len(allowed)] == allowed && path[len(allowed)] == '/') {
+		allowed = guardPathAllowKey(allowed)
+		if path == allowed || (allowed == "/" && strings.HasPrefix(path, "/")) || (len(path) > len(allowed) && path[:len(allowed)] == allowed && path[len(allowed)] == '/') {
 			return true
 		}
 	}
@@ -2427,7 +2448,7 @@ func (s *Store) ListGuardPathAllows(limit int) ([]GuardPathAllow, error) {
 	return out, nil
 }
 
-// DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
+// DeleteGuardPathAllow revokes one exception, including legacy spellings of its path.
 // Storage failures return an error rather than reporting an absent exception.
 func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, writeErr error) {
 	s.mu.Lock()
@@ -2437,18 +2458,42 @@ func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, 
 			s.noteWrite("guard path revocations", writeErr)
 		}
 	}()
-	res, err := s.db.Exec(
-		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`,
-		agent, ruleID, path,
-	)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("delete guard path allow: %w", err)
+		return false, fmt.Errorf("begin guard path allow revocation: %w", err)
 	}
-	n, err := res.RowsAffected()
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT path FROM guard_path_allows WHERE agent = ? AND rule_id = ?`, agent, ruleID)
 	if err != nil {
-		return false, fmt.Errorf("guard path allow deletion result: %w", err)
+		return false, fmt.Errorf("read guard path allows for revocation: %w", err)
 	}
-	return n > 0, nil
+	defer rows.Close()
+	key := guardPathAllowKey(path)
+	var matches []string
+	for rows.Next() {
+		var stored string
+		if err := rows.Scan(&stored); err != nil {
+			return false, fmt.Errorf("scan guard path allow for revocation: %w", err)
+		}
+		if guardPathAllowKey(stored) == key {
+			matches = append(matches, stored)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("read guard path allows for revocation: %w", err)
+	}
+	if len(matches) == 0 {
+		return false, nil
+	}
+	for _, stored := range matches {
+		if _, err := tx.Exec(`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`, agent, ruleID, stored); err != nil {
+			return false, fmt.Errorf("delete guard path allow: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit guard path allow revocation: %w", err)
+	}
+	return true, nil
 }
 
 // PutGuardRule saves an agent's rule-wide answer. A failed save is returned

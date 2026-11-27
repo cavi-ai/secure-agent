@@ -11,7 +11,7 @@ export function checkTool(event, ctx, hookEvent) {
     const timer = setTimeout(() => { child.kill(); reject(new Error('Guard timed out')); }, 10000);
     child.stdout.on('data', chunk => {
       bytes += chunk.length;
-      if (bytes > 1024 * 1024) { child.kill(); reject(new Error('Guard output exceeded limit')); }
+      if (bytes > 1024 * 1024) { clearTimeout(timer); child.kill(); reject(new Error('Guard output exceeded limit')); }
       else stdout += chunk.toString();
     });
     child.stderr.resume();

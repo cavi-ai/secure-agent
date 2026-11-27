@@ -88,7 +88,8 @@ const cases = {
   },
   'playbook error': async () => {
     const slot = node();
-    const ctx = appBlock(context(['lib.js'], { fetchPlan: async () => { throw new Error(H); }, planSlots: () => [slot], paintPlanSlots() {}, pollPlan() {} }),
+    const ctx = appBlock(context(['lib.js'], { sessionEnded: false, handoffGeneration: 0,
+      fetchPlan: async () => { throw new Error(H); }, planSlots: () => [slot], paintPlanSlots() {}, pollPlan() {} }),
       '  async function loadPlanSlot(', '  window.askAdvisorPlan');
     await ctx.loadPlanSlot(H);
     return slot.innerHTML;

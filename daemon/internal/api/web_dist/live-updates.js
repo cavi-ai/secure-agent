@@ -108,6 +108,8 @@ function connectConsoleStream(fetchStream, timers = globalThis) {
   const controller = new AbortController();
   const listeners = new Map();
   let retryTimer;
+  let backoffMs = 1000;
+  const maxBackoffMs = 30000;
   const source = {
     closed: false,
     addEventListener(kind, handler) { listeners.set(kind, handler); },
@@ -119,6 +121,7 @@ function connectConsoleStream(fetchStream, timers = globalThis) {
   };
 
   async function connect() {
+    let retryDelay = backoffMs;
     try {
       const response = await fetchStream('/events/stream', {
         headers: { Accept: 'text/event-stream' },
@@ -128,10 +131,12 @@ function connectConsoleStream(fetchStream, timers = globalThis) {
       if (source.closed) return;
       if (!response.ok || !response.body || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
         source.close();
-        source.onerror();
+        source.onerror?.();
         return;
       }
-      source.onopen();
+      backoffMs = 1000;
+      retryDelay = 1000;
+      source.onopen?.();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -140,9 +145,13 @@ function connectConsoleStream(fetchStream, timers = globalThis) {
           const { value, done } = await reader.read();
           if (done || source.closed) break;
           buffer += decoder.decode(value, { stream: true });
+          if (buffer.length > 1024 * 1024) {
+            buffer = '';
+            break;
+          }
           let end;
           while (!source.closed && (end = buffer.indexOf('\n\n')) !== -1) {
-            const frame = buffer.slice(0, end);
+            const frame = buffer.slice(0, end).replace(/\r\n/g, '\n');
             buffer = buffer.slice(end + 2);
             const fields = /^event: ([^\n]+)\ndata: ([^\n]*)$/.exec(frame);
             if (fields) listeners.get(fields[1])?.({ data: fields[2] });
@@ -156,8 +165,9 @@ function connectConsoleStream(fetchStream, timers = globalThis) {
       // An interrupted stream is retried without replaying any mutations.
     }
     if (source.closed) return;
-    source.onerror();
-    retryTimer = timers.setTimeout(connect, 3000);
+    source.onerror?.();
+    backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+    retryTimer = timers.setTimeout(connect, retryDelay);
   }
 
   void connect();

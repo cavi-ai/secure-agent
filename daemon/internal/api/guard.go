@@ -141,6 +141,7 @@ type guardHandlers struct {
 	emitEvent  func(event.Kind, string)
 	saveLabel  func(model.OperatorLabel)
 	replyProbe func(http.ResponseWriter, guardDecisionRequest)
+	serverDone func() bool
 }
 
 // handleGuardDecision answers a hook's prompt-mode query: a cached (agent,rule)
@@ -217,6 +218,9 @@ func (g *guardHandlers) ProxyEgressDecision(ctx context.Context, pid int32, sess
 // errSessionUnavailable: the request's session could not be read.
 var errSessionUnavailable = fmt.Errorf("session data unavailable")
 
+// errDaemonShuttingDown: the daemon is shutting down while a prompt waited.
+var errDaemonShuttingDown = fmt.Errorf("daemon shutting down")
+
 // decideGuard answers one guard query from peerPID (-1 when unknown): a saved
 // permission or rule answers at once, otherwise the request is prompted and
 // blocks until answered, timed out (deny) or withdrawn with ctx (deny).
@@ -265,9 +269,6 @@ func (g *guardHandlers) decideGuard(ctx context.Context, req guardDecisionReques
 			Workspace: req.Workspace,
 		})
 	}
-	// Push, not just poll: SSE subscribers (menubar) refetch /guard/pending
-	// immediately instead of waiting out their poll interval.
-	g.emitEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
 	scopes := []model.ScopeChoice{{Kind: "once"}}
 	probe := identity
 	model.ScopeChoice{Kind: "session"}.Apply(&probe, time.Now().UTC())
@@ -298,14 +299,23 @@ func (g *guardHandlers) decideGuard(ctx context.Context, req guardDecisionReques
 	if req.RuleID == model.EgressRule {
 		scopeText = "Once answers this request. Future permissions cover only the sends named here, or, when you choose their kind, every send of that kind, from this tool, workspace and observed executable path; other kinds still ask. Session permission ends with this session; timed permission expires after 24 hours or 7 days; Always lasts until revoked. Executable signatures are not verified. Revoke under Protection → Rules & permissions."
 	}
-	d := g.guardBroker.Request(ctx, guard.Pending{
+	// Push, not just poll: notify SSE subscribers only once the prompt is
+	// queued in the broker so GET /guard/pending never races ahead of it.
+	d := g.guardBroker.RequestWithNotify(ctx, guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		Detail:    promptDetail(req.Detail),
 		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
 		Categories: req.Categories, DefaultScope: preselect, Repeats: repeats,
 		ScopeText: scopeText,
+	}, func() {
+		if g.emitEvent != nil {
+			g.emitEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
+		}
 	})
 	if ctx.Err() != nil {
+		if g.serverDone != nil && g.serverDone() {
+			return guard.Decision{}, errDaemonShuttingDown
+		}
 		// The hook stopped waiting (its own deadline, or the harness killed
 		// it) and denied the call itself: an answer that lands now never
 		// reached the agent, so it saves no rule and is recorded as a deny.
