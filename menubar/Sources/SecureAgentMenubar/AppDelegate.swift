@@ -10,6 +10,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private let state = AppState()
     let popover = NSPopover()
     private var launchTask: Task<Void, Never>?
+    private var daemonStartTask: Task<Void, Never>?
+    private var routingTask: Task<Void, Never>?
+    private var claimedInstance = false
     /// A repair URL that arrives before launch finishes waits for it.
     private var launched = false
     private var telemetryRepairRequested = false
@@ -40,6 +43,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
                 if !Task.isCancelled { NSApp.terminate(nil) }
                 return
             }
+            claimedInstance = true
             guard !Task.isCancelled else { return }
             if AppPreferences.shared.bool(forKey: "setupWizardDismissed") {
                 SettingsWindowController.shared.show()
@@ -61,8 +65,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // child of this app so it lives and dies with the visible menu bar icon.
         // The migration's launchctl call runs off the main thread; the daemon
         // starts once it is done.
-        Task { @MainActor in
+        daemonStartTask = Task { @MainActor in
             await SetupManager.shared.migrateLegacyLaunchAgent()
+            guard !Task.isCancelled else { return }
             SetupManager.shared.migrateTelemetryChoice()
             DaemonSupervisor.shared.start()
         }
@@ -86,7 +91,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
             reconnectConsole()
         }
 
-        Task {
+        routingTask = Task {
             await SetupManager.shared.reapplyClaudeRouting()
         }
         Task {
@@ -121,16 +126,24 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        // Quitting the app must take the daemon with it — no hidden survivor.
-        // Stop the event stream/polling first so no in-flight fetch outlives us.
+        // Quitting the app must disengage hooks immediately and take the daemon
+        // with it — no hidden survivor, and no fail-closed hook denials while
+        // the daemon is shutting down. Only the instance that claimed the lease
+        // owns the shared routing, daemon, and lock file.
         launchTask?.cancel()
+        daemonStartTask?.cancel()
+        routingTask?.cancel()
+        flashTask?.cancel()
+        if claimedInstance {
+            AppInstanceGuard.shared.release()
+        }
         statusItemController.stop()
         state.stop()
+        guard claimedInstance else { return }
         // Routing points Claude Code at this app's proxy; take it back before
         // the proxy goes away.
         SetupManager.shared.withdrawClaudeRouting()
         DaemonSupervisor.shared.stop()
-        AppInstanceGuard.shared.release()
     }
 
     /// The console's `--brand` purple (style.css): hsl(248 92% 70%) on a dark
@@ -383,7 +396,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     @objc private func quitClicked() { NSApp.terminate(nil) }
 
     @objc private func uninstallClicked() {
-        SetupManager.shared.confirmUninstall()
-        NSApp.terminate(nil)
+        if SetupManager.shared.confirmUninstall() {
+            NSApp.terminate(nil)
+        }
     }
 }

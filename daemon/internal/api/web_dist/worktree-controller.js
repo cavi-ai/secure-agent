@@ -47,13 +47,23 @@ function createWorktreeController({ request, toast, confirm, render, renderSelec
     // Clutter: loaded with the tab like worktrees; re-read while sizes land.
     clutterState: { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set(), removing: new Set() },
     clutterSizingTimer: null,
-    clutterSizingPolls: 0
+    clutterSizingPolls: 0,
+    stopGeneration: 0
   };
   const { worktreesState, clutterState } = s;
 
   return {
     get worktreesState() { return worktreesState; },
     get clutterState() { return clutterState; },
+    stop() {
+      s.stopGeneration++;
+      clearInterval(s.removalTicker);
+      s.removalTicker = null;
+      clearTimeout(s.removalLinger);
+      s.removalLinger = null;
+      clearTimeout(s.clutterSizingTimer);
+      s.clutterSizingTimer = null;
+    },
     loadWorktrees: refresh => worktreeCtlLoadWorktrees(s, refresh),
     loadClutter: refresh => worktreeCtlLoadClutter(s, refresh),
     loadLedger: () => worktreeCtlLoadLedger(s),
@@ -821,11 +831,14 @@ async function worktreeCtlAdviseClutterProject(s, project) {
       return;
     }
     toast('Asked the local advisor for a plan — it appears under the project when it answers', 'info');
+    const generation = s.stopGeneration;
     for (let i = 0; i < WORKTREE_CLUTTER_PLAN_POLLS; i++) {
       await new Promise(res => setTimeout(res, WORKTREE_CLUTTER_PLAN_EVERY_MS));
+      if (s.stopGeneration !== generation) break;
       const g = await request('/cleanup', { timeoutMs: WORKTREE_TIMEOUT_MS });
-      if (!g.ok) break;
+      if (s.stopGeneration !== generation || !g.ok) break;
       const rep = await g.json();
+      if (s.stopGeneration !== generation) break;
       clutterState.report = rep;
       markDirty('clutter');
       if (rep.advice && rep.advice[project]) break;

@@ -177,4 +177,16 @@ final class ClaudeRoutingTests: XCTestCase {
         }))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: settingsPath)), original)
     }
+
+    func testIsAppliedDoesNotOverwriteOriginalBackup() throws {
+        let original = #"{"env":{"FOO":"bar"},"model":"opus"}"#
+        write(original)
+        XCTAssertFalse(ClaudeRouting.isApplied(at: settingsPath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: settingsPath + ".bak-secure-agent"))
+        try ClaudeRouting.apply(at: settingsPath, info: info())
+        let backup = try String(contentsOfFile: settingsPath + ".bak-secure-agent", encoding: .utf8)
+        XCTAssertEqual(backup, original)
+        XCTAssertTrue(ClaudeRouting.isApplied(at: settingsPath))
+        XCTAssertEqual(try String(contentsOfFile: settingsPath + ".bak-secure-agent", encoding: .utf8), original)
+    }
 }

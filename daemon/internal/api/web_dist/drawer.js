@@ -97,7 +97,17 @@ function createDrawer({ request, toast, markDirty, closeAgentDock, auth, attenti
 
 function drawerSyncMode(s) {
   const { drawer, auth, dockMedia, wideDockMedia, inertBefore } = s;
-  if (!drawer || auth.ended()) return;
+  if (!drawer) return;
+  if (auth.ended()) {
+    if (drawer.hidden) {
+      s.modal = false;
+      drawer.removeAttribute('aria-modal');
+      drawer.dataset.modal = 'false';
+      for (const [el, previous] of inertBefore) el.inert = previous;
+      inertBefore.clear();
+    }
+    return;
+  }
   const wide = drawer.classList.contains('resource-policy');
   const collapsed = document.body?.classList.contains('sidebar-collapsed') ? 1 : 0;
   const media = (wide ? wideDockMedia : dockMedia)[collapsed];

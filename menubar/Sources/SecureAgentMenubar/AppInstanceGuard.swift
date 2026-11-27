@@ -9,8 +9,13 @@ final class InstanceLease {
 
     func acquire(at path: String) -> Bool {
         if descriptor >= 0 { return true }
-        let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { return false }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_uid == getuid() else {
+            close(fd)
+            return false
+        }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             close(fd)
             return false
@@ -56,14 +61,13 @@ final class AppInstanceGuard {
         }
 
         let existing = otherCopies()
-        let locked = lease.acquire(at: lockPath)
         if existing.isEmpty {
-            if locked { return true }
+            if lease.acquire(at: lockPath) { return true }
             // Hook liveness checks briefly probe the same lease. Allow that
             // transient reader to finish before reporting another app owner.
             for _ in 0..<5 {
                 try? await Task.sleep(for: .milliseconds(10))
-                guard !Task.isCancelled else { return false }
+                guard !Task.isCancelled else { lease.release(); return false }
                 if lease.acquire(at: lockPath) { return true }
             }
             explain("Secure Agent could not claim its local instance lock. Another copy may be starting, or the lock file may be inaccessible.")
@@ -73,21 +77,20 @@ final class AppInstanceGuard {
         let alert = NSAlert()
         alert.messageText = "Secure Agent is already running"
         alert.informativeText = "Two copies would compete for the same monitoring socket and console. Replace the running copy to use this build."
-        if !existing.isEmpty { alert.addButton(withTitle: "Replace running copy") }
+        alert.addButton(withTitle: "Replace running copy")
         alert.addButton(withTitle: "Keep running copy")
         NSApp.activate(ignoringOtherApps: true)
-        let replace = !existing.isEmpty && alert.runModal() == .alertFirstButtonReturn
+        let replace = alert.runModal() == .alertFirstButtonReturn
         guard replace else {
-            lease.release()
             return false
         }
 
         guard !Task.isCancelled else { return false }
         for app in existing { _ = app.terminate() }
         for _ in 0..<50 {
-            if otherCopies().isEmpty && (locked || lease.acquire(at: lockPath)) { return true }
+            if otherCopies().isEmpty && lease.acquire(at: lockPath) { return true }
             try? await Task.sleep(for: .milliseconds(100))
-            if Task.isCancelled { return false }
+            if Task.isCancelled { lease.release(); return false }
         }
         lease.release()
         explain(otherCopies().isEmpty

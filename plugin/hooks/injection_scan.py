@@ -11,15 +11,19 @@ homoglyphs (`disregаrd`) still hit the ASCII patterns.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import unicodedata
+
+_HOOK_DIR = os.path.dirname(os.path.realpath(__file__))
+if _HOOK_DIR not in sys.path:
+    sys.path.insert(0, _HOOK_DIR)
 
 from activity_log import app_running, log_payload
 
 INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
-    re.compile(r"ignore\s+(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
     re.compile(r"disregard\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)", re.IGNORECASE),
     re.compile(r"forget\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)", re.IGNORECASE),
     re.compile(r"do\s+not\s+follow\s+(?:any\s+|the\s+)?(?:previous|prior|above)", re.IGNORECASE),
@@ -49,6 +53,10 @@ _HOMOGLYPHS = str.maketrans({
 
 
 def _normalize(s: str) -> str:
+    # Fast path for pure ASCII: NFKC, Cf-stripping, and Cyrillic/Greek homoglyph
+    # translation are all strict no-ops on ASCII strings.
+    if s.isascii():
+        return s
     # NFKC folds full-width/compatibility chars to ASCII; then drop
     # zero-width/format chars (category Cf) that visually split keywords;
     # then fold homoglyphs so `disregаrd` matches `disregard`.
@@ -101,6 +109,7 @@ def main():
     try:
         raw = sys.stdin.read()
         if not raw.strip():
+            print("{}")
             return
         payload = json.loads(raw)
         if not app_running():
@@ -110,7 +119,8 @@ def main():
             log_payload(payload)
         except Exception:
             pass
-        result = payload.get("tool_result") or payload.get("content") or payload
+        result = (payload.get("tool_response") or payload.get("tool_output")
+                  or payload.get("tool_result") or payload.get("content") or payload)
         hits = scan_text(result)
     except Exception:
         # A scanner crash must never break the harness's tool loop — emit the

@@ -405,6 +405,17 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       actions: {
         clearGuardResult: () => guardDecisions.clear(),
+        stopBackgroundPolls: () => {
+          clearTimeout(agentPollTimer);
+          agentPollTimer = null;
+          agentState.polls = 0;
+          for (const timer of planPolls.values()) clearTimeout(timer);
+          planPolls.clear();
+          planFlagCache.clear();
+          planResponseCache.clear();
+          instructionRequests.clear();
+          worktreeController?.stop?.();
+        },
         get closeDrawer() { return detailDrawer.close; },
         get apiFetch() { return apiFetch; },
         clearInterval: (...args) => window.clearInterval(...args),
@@ -753,15 +764,26 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   syncNavigationLayout();
   compactNavigation.addEventListener?.('change', syncNavigationLayout);
+  let tabsStuckFrame = 0;
+  let lastTabsStuck = null;
   function syncTabsStuck() {
     if (!tabsBar) return;
     const stuck = window.scrollY > 0 && tabsBar.getBoundingClientRect().top <= 0;
+    if (stuck === lastTabsStuck) return;
+    lastTabsStuck = stuck;
     tabsBar.classList.toggle('is-stuck', stuck);
     const pill = document.getElementById('tabs-posture');
     if (pill) pill.hidden = !stuck;
   }
-  window.addEventListener('scroll', syncTabsStuck, { passive: true });
-  window.addEventListener('resize', syncTabsStuck);
+  function scheduleSyncTabsStuck() {
+    if (tabsStuckFrame) return;
+    tabsStuckFrame = window.requestAnimationFrame(() => {
+      tabsStuckFrame = 0;
+      syncTabsStuck();
+    });
+  }
+  window.addEventListener('scroll', scheduleSyncTabsStuck, { passive: true });
+  window.addEventListener('resize', scheduleSyncTabsStuck);
 
   function flashFirewallPanel() {
     if (reducedMotion) return;
@@ -1178,7 +1200,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (summary) {
         hookDiagnostic = { text: summary, seq, auth, busy: false };
         drawerBody.insertAdjacentHTML('beforeend', hookDiagnosticPreviewHTML(summary));
-        document.querySelector('#drawer-foot [data-action="hook-diagnostic-copy"]').disabled = false;
+        const copyButton = document.querySelector('#drawer-foot [data-action="hook-diagnostic-copy"]');
+        if (copyButton) copyButton.disabled = false;
       }
     } catch {
       if (current()) drawerBody.innerHTML=repair?hookRepairHTML(scope,null,'Verification unavailable. Check again; repair remains unconfirmed.'):'<p role="status">Hook evidence unavailable. Refresh to retry; recovery is unknown.</p>';
@@ -1543,6 +1566,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.sendAgentMessage = (...args) => agentControllerControllerModule().sendAgentMessage(...args);
   window.runLocalAgentAction = (...args) => agentControllerControllerModule().runLocalAgentAction(...args);
   function followAgent(wasBusy) {
+    if (sessionEnded) return;
     if (!agentBusy()) {
       agentState.polls = 0;
       if (wasBusy) loadAgent(['chat', 'plans', 'runs', 'recommendations']);
@@ -1552,6 +1576,7 @@ document.addEventListener('DOMContentLoaded', () => {
     agentState.polls++;
     agentPollTimer = setTimeout(() => {
       agentPollTimer = null;
+      if (sessionEnded) return;
       loadAgent(agentState.chat && agentState.chat.chatting ? ['chat'] : ['runs']);
     }, AGENT_POLL_MS);
   }
@@ -2841,15 +2866,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function pollPlan(subject, tries = 0) {
     clearTimeout(planPolls.get(subject));
-    if (tries >= 30) return;
+    planPolls.delete(subject);
+    if (sessionEnded || tries >= 30) return;
     planPolls.set(subject, setTimeout(async () => {
-      if (!planSlots(subject).length) return;
+      planPolls.delete(subject);
+      if (sessionEnded || !planSlots(subject).length) return;
       try {
         const resp = await fetchPlan(subject);
+        if (sessionEnded) return;
         paintPlanSlots(subject, resp);
         if (resp.status === 'pending') pollPlan(subject, tries + 1);
       } catch {
-        pollPlan(subject, tries + 1);
+        if (!sessionEnded) pollPlan(subject, tries + 1);
       }
     }, 3000));
   }

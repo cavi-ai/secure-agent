@@ -243,3 +243,20 @@ func TestFleetEndpointEmpty(t *testing.T) {
 		t.Fatalf("empty fleet = %q, want []", buf.String())
 	}
 }
+
+func TestLogQueryIsolatesCollidingSanitizedNodeIDs(t *testing.T) {
+	st := openTestStore(t, t.TempDir())
+	var e1, e2 Envelope
+	_ = json.Unmarshal(envelope("node.1", "flag"), &e1)
+	_ = json.Unmarshal(envelope("node1", "flag"), &e2)
+	if err := st.Append(e1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Append(e2); err != nil {
+		t.Fatal(err)
+	}
+	got := st.Query("node1", map[string]bool{"flag": true}, 10)
+	if len(got) != 1 || got[0].Envelope.NodeID != "node1" {
+		t.Fatalf("query for node1 leaked colliding node: %+v", got)
+	}
+}

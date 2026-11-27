@@ -175,21 +175,24 @@ enum ClaudeRouting {
         return (kept, removed)
     }
 
-    /// The parsed settings file; nil when it does not exist. Backs it up
-    /// before any write, as hook registration does.
+    /// The parsed settings file; nil when it does not exist.
     private static func load(_ path: String) throws -> [String: Any]? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         if data.isEmpty { return [:] }
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw RoutingError.invalidJSON
         }
-        try? data.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
         return root
     }
 
     private static func write(_ root: [String: Any], to path: String) throws {
-        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
-                                                withIntermediateDirectories: true)
+        let fm = FileManager.default
+        if let original = fm.contents(atPath: path), !original.isEmpty,
+           !fm.fileExists(atPath: path + ".bak-secure-agent") {
+            try? original.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
+        }
+        try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
+                               withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }

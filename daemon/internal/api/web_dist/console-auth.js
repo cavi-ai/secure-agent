@@ -24,7 +24,9 @@ function createConsoleAuth({ token = '', fetchImpl = globalThis.fetch, onRejecte
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           if (controller.signal.aborted) throw cancelled();
-          const body = await Promise.race([target[key](...args), stopped]);
+          const bodyRead = target[key](...args);
+          bodyRead.catch(() => {});
+          const body = await Promise.race([bodyRead, stopped]);
           if (!current()) throw cancelled();
           return body;
         } finally {

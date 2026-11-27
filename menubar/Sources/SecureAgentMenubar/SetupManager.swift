@@ -622,18 +622,32 @@ public final class SetupManager: ObservableObject {
                 "OPENCLAW_CONFIG_PATH=" + home + "/.openclaw/openclaw.json", "openclaw"] + args
     }
 
+    private func hookDirectories() -> [String] {
+        [
+            home + "/.claude/hooks",
+            home + "/.cursor/hooks",
+            home + "/.codex/hooks",
+            home + "/.openclaw/extensions/secure-agent",
+            home + "/.config/secure-agent/hooks/antigravity",
+            home + "/.gemini/secure-agent/hooks",
+            home + "/.hermes/plugins/secure-agent",
+            home + "/.config/opencode/plugins/secure-agent",
+            home + "/.config/opencode/hooks",
+        ]
+    }
+
     /// Brings already-installed hook copies up to the bundled versions so an
     /// app update reaches the scripts the harnesses run. Only targets that
-    /// already carry the guard are refreshed; settings.json is not touched.
+    /// already carry a managed guard script are refreshed; settings.json is not touched.
     public func refreshInstalledHooks() {
         guard let srcDir = bundledHooksDir else { return }
-        for target in Self.hookTargets where fm.fileExists(atPath: "\(target)/secret_guard.py") {
+        for target in hookDirectories() where fm.fileExists(atPath: "\(target)/secret_guard.py") || fm.fileExists(atPath: "\(target)/harness_guard.py") {
             do {
                 if let harness = ["hermes", "opencode"].first(where: { HookRegistry.hookDirectory(harness: $0, home: home) == target }) {
                     try HookRegistry.installAdditionalHooks(harness: harness, bundledDir: srcDir, home: home, register: false)
                     continue
                 }
-                if target.contains("/.openclaw/") {
+                if target == HookRegistry.hookDirectory(harness: "openclaw", home: home) {
                     try HookRegistry.installSelectedHooks(harness: "openclaw", bundledDir: srcDir, home: home)
                     continue
                 }
@@ -1595,6 +1609,7 @@ public final class SetupManager: ObservableObject {
             try HookRegistry.Antigravity.unregister(at: home + "/.gemini/config/hooks.json",
                 command: HookRegistry.selectedHookCommand(harness: "antigravity", home: home),
                 legacyCommand: HookRegistry.legacyAntigravityCommand(home: home))
+            cleared.insert(home + "/.gemini/secure-agent/hooks")
         }
         for harness in ["hermes", "opencode"] {
             _ = step(harness) { try HookRegistry.uninstallAdditionalPlugin(harness: harness, home: home) }
@@ -1608,7 +1623,7 @@ public final class SetupManager: ObservableObject {
                 }
             }
         }
-        for target in Self.hookTargets where cleared.contains(target) {
+        for target in hookDirectories() where cleared.contains(target) {
             for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py", "harness_guard.py", "guard-rules.json"] {
                 try? fm.removeItem(atPath: "\(target)/\(hook)")
             }

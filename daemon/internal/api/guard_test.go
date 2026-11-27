@@ -292,3 +292,40 @@ func TestGuardAnswerRacingTheHookLeavingSavesNoRule(t *testing.T) {
 		t.Fatal("Allow Always for a hook that had left saved a guard rule")
 	}
 }
+
+func TestGuardDecisionReturns503WhenServerShuttingDown(t *testing.T) {
+	st := testStore(t)
+	a := newTestAPI(Deps{
+		SocketPath: "", Store: st, Killer: &fakeKiller{},
+		Status: func() Status { return Status{Running: true} },
+		Guard:  GuardDeps{Broker: guard.NewBroker(time.Minute)},
+	})
+	lifeCtx, stopServer := context.WithCancel(context.Background())
+	a.life = lifeCtx
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/guard/decision",
+			strings.NewReader(`{"agent":"antigravity","tool":"Bash","path":"git push origin","rule_id":"untrusted-egress"}`)).WithContext(reqCtx)
+		a.handleGuardDecision(rec, req)
+	}()
+
+	// Wait for the prompt to queue, then simulate server shutdown.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(a.guardBroker.Pending()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("prompt never queued")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	stopServer()
+	cancelReq()
+	<-done
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d (%s), want 503 during daemon shutdown", rec.Code, rec.Body.String())
+	}
+}

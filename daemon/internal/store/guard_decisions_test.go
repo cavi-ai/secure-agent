@@ -147,3 +147,26 @@ func TestGuardDecisionDeadlineIsProductionOnly(t *testing.T) {
 		t.Fatalf("rows = %+v, want only the fixture row", rows)
 	}
 }
+
+func TestGuardPathAllowCleansPathsAndMatchesRoot(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "guard-allow.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.PutGuardPathAllow(GuardPathAllow{Agent: "antigravity", RuleID: "ssh-keys", Path: "/Users/dev/.ssh/"}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.GuardPathAllowed("antigravity", "ssh-keys", "/Users/dev/.ssh/id_ed25519") {
+		t.Fatal("trailing slash in stored guard_path_allows failed to match descendant")
+	}
+	if ok, err := s.DeleteGuardPathAllow("antigravity", "ssh-keys", "/Users/dev/.ssh/"); err != nil || !ok {
+		t.Fatalf("delete trailing slash path: ok=%v err=%v", ok, err)
+	}
+	if err := s.PutGuardPathAllow(GuardPathAllow{Agent: "antigravity", RuleID: "env-files", Path: "/"}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.GuardPathAllowed("antigravity", "env-files", "/tmp/.env") {
+		t.Fatal("root guard_path_allows failed to match descendant")
+	}
+}

@@ -590,11 +590,22 @@ func (s *Store) recordEventActivityLocked(e event.Event) {
 // inside it: each statement takes mu on its own.
 func (s *Store) retain() {
 	s.PruneEvents()
+	s.pruneLastSeen(time.Now().Add(-24 * time.Hour))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneRollupLocked()
 	s.pruneSessionsLocked()
 	refreshPlannerStats(s.db)
+}
+
+func (s *Store) pruneLastSeen(cutoff time.Time) {
+	s.lastSeenMu.Lock()
+	defer s.lastSeenMu.Unlock()
+	for pid, ts := range s.lastSeen {
+		if ts.Before(cutoff) {
+			delete(s.lastSeen, pid)
+		}
+	}
 }
 
 // pruneBatch is the most rows one retention statement deletes, so no
@@ -1800,18 +1811,18 @@ func (s *Store) AdvisorVerdictResultFor(subjectID, kind string) (v model.Advisor
 	return s.advisorVerdictResult(subjectID, kind)
 }
 
-// attachNarratives joins advisor narratives onto incidents.
+// attachNarratives joins advisor narratives onto incidents in batched queries.
 func (s *Store) attachNarratives(list []model.IncidentReport) {
 	if len(list) == 0 {
 		return
 	}
-	var readErr error
+	ids := make([]string, len(list))
 	for i := range list {
-		v, ok, err := s.advisorVerdictResult(list[i].ID, "incident")
-		if readErr == nil {
-			readErr = err
-		}
-		if ok {
+		ids[i] = list[i].ID
+	}
+	verdicts, readErr := s.advisorVerdicts(ids, "incident")
+	for i := range list {
+		if v, ok := verdicts[list[i].ID]; ok {
 			list[i].AdvisorNarrative = v.Rationale
 		}
 	}
@@ -1836,7 +1847,9 @@ func (s *Store) PutAudit(a AuditEntry) {
 	if err != nil {
 		log.Printf("store: failed to insert audit %s: %v", a.Action, err)
 	}
-	_, _ = s.db.Exec(`DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT ?)`, maxAudit)
+	if maxAudit > 0 {
+		_, _ = s.db.Exec(`DELETE FROM audit WHERE id < (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET ?)`, maxAudit-1)
+	}
 }
 
 func (s *Store) RecentAudit(limit int) []AuditEntry {
@@ -2359,12 +2372,16 @@ type GuardPathAllow struct {
 func (s *Store) PutGuardPathAllow(g GuardPathAllow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	cleanPath := g.Path
+	if cleanPath != "" {
+		cleanPath = filepath.Clean(cleanPath)
+	}
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(
 		`INSERT INTO guard_path_allows (agent, rule_id, path, created_at)
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(agent, rule_id, path) DO UPDATE SET created_at=excluded.created_at`,
-		g.Agent, g.RuleID, g.Path, ts)
+		g.Agent, g.RuleID, cleanPath, ts)
 	if err != nil {
 		log.Printf("store: put guard_path_allows error: %v", err)
 	}
@@ -2389,7 +2406,10 @@ func (s *Store) guardPathAllowed(agent, ruleID, path string) bool {
 		if err := rows.Scan(&allowed); err != nil {
 			continue
 		}
-		if path == allowed || (len(path) > len(allowed) && path[:len(allowed)] == allowed && path[len(allowed)] == '/') {
+		if allowed != "" {
+			allowed = filepath.Clean(allowed)
+		}
+		if path == allowed || (allowed == "/" && strings.HasPrefix(path, "/")) || (len(path) > len(allowed) && path[:len(allowed)] == allowed && path[len(allowed)] == '/') {
 			return true
 		}
 	}
@@ -2437,9 +2457,13 @@ func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) (removed bool, 
 			s.noteWrite("guard path revocations", writeErr)
 		}
 	}()
+	cleanPath := path
+	if cleanPath != "" {
+		cleanPath = filepath.Clean(cleanPath)
+	}
 	res, err := s.db.Exec(
-		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`,
-		agent, ruleID, path,
+		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND (path = ? OR path = ?)`,
+		agent, ruleID, path, cleanPath,
 	)
 	if err != nil {
 		return false, fmt.Errorf("delete guard path allow: %w", err)

@@ -1173,6 +1173,9 @@ func (l *jsonlLog) Query(nodeID string, kinds map[string]bool, limit int) []enve
 			if json.Unmarshal(line, &rec) != nil {
 				return false
 			}
+			if rec.Envelope.NodeID != "" && rec.Envelope.NodeID != nodeID {
+				return false
+			}
 			if len(kinds) > 0 && !kinds[rec.Envelope.Kind] {
 				return false
 			}

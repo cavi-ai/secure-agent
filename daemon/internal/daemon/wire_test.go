@@ -555,8 +555,21 @@ func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
 }
 
 func TestWatchParentExit(t *testing.T) {
-	if ch := watchParentExit(1); ch != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if ch := watchParentExit(ctx, 1); ch != nil {
 		t.Fatal("pid-1 launch must not start an orphan watch")
+	}
+	// If the owning parent already exited before WaitForShutdown (e.g. during Build),
+	// watchParentExit closes immediately instead of hanging forever.
+	ch := watchParentExit(ctx, os.Getppid()+999999)
+	if ch == nil {
+		t.Fatal("expected channel for non-pid-1 parent")
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected immediate close when parent already changed")
 	}
 }
 

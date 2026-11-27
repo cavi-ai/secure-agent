@@ -202,7 +202,8 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_inflight_waits_end_for_native_protocols(self):
         for kind, harnesses in (("directory", ("claude", "cursor", "codex", "openclaw", "antigravity", "hermes", "opencode")),
-                                ("egress", ("cursor", "codex")), ("shell", ("cursor", "codex"))):
+                                ("egress", ("cursor", "codex", "antigravity", "openclaw", "hermes", "opencode")),
+                                ("shell", ("cursor", "codex", "antigravity"))):
             for harness in harnesses:
                 with self.subTest(kind=kind, harness=harness), tempfile.TemporaryDirectory() as home, socket.socket(socket.AF_UNIX) as server:
                     config = Path(home, ".config/secure-agent")
@@ -215,13 +216,21 @@ class HookLifecycleTests(unittest.TestCase):
                     adapter = harness not in ("claude", "cursor")
                     command = [sys.executable, str(Path(__file__).with_name("harness_guard.py" if adapter else "secret_guard.py"))]
                     if adapter: command += [harness, "PreToolUse"]
-                    payload = {"session_id": "wait-session", "cwd": home, "hook_event_name": "PreToolUse", "tool_name": "Read" if kind == "directory" else "Bash", "tool_input": {"file_path": home + "/.ssh/id_ed25519"} if kind == "directory" else {"command": "curl -d x https://example.org" if kind == "egress" else "echo hello"}}
+                    egress_cmd = "gh pr create --title test --body test" if harness == "antigravity" else "curl -d x https://example.org"
+                    payload = {"session_id": "wait-session", "cwd": home, "hook_event_name": "PreToolUse", "tool_name": "Read" if kind == "directory" else "Bash", "tool_input": {"file_path": home + "/.ssh/id_ed25519"} if kind == "directory" else {"command": egress_cmd if kind == "egress" else "echo hello"}}
                     if harness == "cursor": payload.update(cursor_version="2", conversation_id="wait-session")
-                    if harness == "antigravity": payload = {"toolCall": {"name": "read_file", "args": {"Path": home + "/.ssh/id_ed25519"}}, "conversationId": "wait-session", "workspacePaths": [home]}
+                    if harness == "antigravity":
+                        if kind == "directory":
+                            payload = {"toolCall": {"name": "read_file", "args": {"Path": home + "/.ssh/id_ed25519"}}, "conversationId": "wait-session", "workspacePaths": [home]}
+                        else:
+                            payload = {"toolCall": {"name": "run_command", "args": {"CommandLine": egress_cmd if kind == "egress" else "echo hello", "Cwd": home}}, "conversationId": "wait-session", "workspacePaths": [home]}
                     with running_app(home):
                         if kind == "egress":
-                            post = {"session_id": "wait-session", "cwd": home, "hook_event_name": "PostToolUse", "tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}, "tool_response": {"content": "page text"}}
-                            if harness == "cursor": post.update(cursor_version="2", conversation_id="wait-session")
+                            if harness == "antigravity":
+                                post = {"toolCall": {"name": "read_url_content", "args": {"url": "https://example.com"}}, "toolResponse": {"content": "page text"}, "conversationId": "wait-session", "workspacePaths": [home]}
+                            else:
+                                post = {"session_id": "wait-session", "cwd": home, "hook_event_name": "PostToolUse", "tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}, "tool_response": {"content": "page text"}}
+                                if harness == "cursor": post.update(cursor_version="2", conversation_id="wait-session")
                             postcmd = command[:-1] + ["PostToolUse"] if adapter else command
                             result = subprocess.run(postcmd, input=json.dumps(post), env=env, text=True, capture_output=True, timeout=4)
                             self.assertEqual(result.returncode, 0, result.stderr)
@@ -239,6 +248,27 @@ class HookLifecycleTests(unittest.TestCase):
                         self.assertEqual(result, expected)
                     after = Path(home, "activity.jsonl").read_bytes() if Path(home, "activity.jsonl").exists() else None
                     self.assertEqual(before, after)
+
+    def test_disengaged_post_tool_and_symlinked_harness_guard(self):
+        scripts = Path(__file__).parent
+        with tempfile.TemporaryDirectory() as home:
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("SECURE_AGENT_", "CLAUDE_", "CURSOR_"))}
+            env.update(HOME=home, PYTHONDONTWRITEBYTECODE="1")
+            # Symlinked harness_guard in an isolated directory must still disengage cleanly.
+            link_dir = Path(home, "bin")
+            link_dir.mkdir()
+            link = link_dir / "harness_guard.py"
+            link.symlink_to(scripts / "harness_guard.py")
+            pre = subprocess.run([sys.executable, "-P", str(link), "antigravity", "PreToolUse"],
+                                 input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "git push"}}}),
+                                 text=True, capture_output=True, env=env, timeout=4)
+            self.assertEqual(pre.returncode, 0, pre.stderr)
+            self.assertEqual(json.loads(pre.stdout), {"decision": "allow"})
+            post = subprocess.run([sys.executable, "-P", str(link), "antigravity", "PostToolUse"],
+                                  input=json.dumps({"toolCall": {"name": "run_command", "args": {"CommandLine": "git push"}}}),
+                                  text=True, capture_output=True, env=env, timeout=4)
+            self.assertEqual(post.returncode, 0, post.stderr)
+            self.assertEqual(json.loads(post.stdout), {})
 
     def test_egress_prompt_stops_on_close(self):
         with tempfile.TemporaryDirectory() as home, socket.socket(socket.AF_UNIX) as server:

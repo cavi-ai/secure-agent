@@ -401,3 +401,28 @@ func TestDuplicateKeepsThePromptAfterTheFirstLeaves(t *testing.T) {
 		}
 	})
 }
+
+func TestRequestWithNotifyFiresAfterPromptQueued(t *testing.T) {
+	b := NewBroker(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	notified := make(chan []Pending, 1)
+	done := make(chan Decision, 1)
+	go func() {
+		done <- b.RequestWithNotify(ctx, Pending{
+			ID: "n1", Agent: "antigravity", RuleID: "untrusted-egress", Path: "git push origin", Tool: "Bash",
+		}, func() {
+			notified <- b.Pending()
+		})
+	}()
+	pending := <-notified
+	if len(pending) != 1 || pending[0].ID != "n1" {
+		t.Fatalf("Pending() inside onQueued = %+v, want n1 already queued", pending)
+	}
+	if !b.Resolve("n1", Decision{Verdict: "allow", Scope: "once"}) {
+		t.Fatal("Resolve failed")
+	}
+	if d := <-done; d.Verdict != "allow" {
+		t.Fatalf("decision = %+v, want allow", d)
+	}
+}

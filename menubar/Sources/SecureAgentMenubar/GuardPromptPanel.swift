@@ -185,6 +185,10 @@ final class GuardPromptPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
     override func cancelOperation(_ sender: Any?) { model.deny() }
+    override func close() {
+        finish(.withdrawn)
+        super.close()
+    }
 
     /// The first answer or withdrawal wins.
     private func finish(_ choice: GuardPromptChoice) {
@@ -210,6 +214,7 @@ final class GuardPromptPanel: NSPanel {
 
     /// Shows the prompt and returns its answer, or `.withdrawn`.
     static func present(_ content: GuardPromptContent) async -> GuardPromptChoice {
+        shown?.withdraw()
         let panel = GuardPromptPanel(content: content)
         panel.placeOnScreen()
         return await withCheckedContinuation { answer in

@@ -108,6 +108,13 @@ func NewBroker(timeout time.Duration) *Broker {
 // the queue is full the request is denied immediately with an explicit
 // reason.
 func (b *Broker) Request(ctx context.Context, p Pending) Decision {
+	return b.RequestWithNotify(ctx, p, nil)
+}
+
+// RequestWithNotify behaves like Request and invokes onQueued right after the
+// prompt is visible in Pending() (outside the broker lock), so SSE subscribers
+// polling /guard/pending never race ahead of prompt registration.
+func (b *Broker) RequestWithNotify(ctx context.Context, p Pending, onQueued func()) Decision {
 	if p.TS == "" {
 		p.TS = time.Now().UTC().Format(time.RFC3339Nano)
 	}
@@ -134,6 +141,9 @@ func (b *Broker) Request(ctx context.Context, p Pending) Decision {
 	}
 	b.waiters[id].callers[ch] = pendingCaller{p: p, ctx: ctx, deadline: deadline}
 	b.mu.Unlock()
+	if onQueued != nil {
+		onQueued()
+	}
 	defer b.leave(id, ch)
 
 	timer := time.NewTimer(b.timeout)

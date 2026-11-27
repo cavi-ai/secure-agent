@@ -153,7 +153,11 @@ func (a *API) advisorReadFailures(kind string) []string {
 // postureFrom derives posture from flags and evidence with live status,
 // resource controls and pending prompts read now; ev stays unchanged.
 func (a *API) postureFrom(now time.Time, flags postureFlags, failedReads []string, ev posture.Inputs) Posture {
-	return derivePosture(a.postureInputsFrom(a.statusFn(), now, flags.patterns, flags.routine, failedReads, ev))
+	return a.postureFromStatus(a.statusFn(), now, flags, failedReads, ev)
+}
+
+func (a *API) postureFromStatus(status Status, now time.Time, flags postureFlags, failedReads []string, ev posture.Inputs) Posture {
+	return derivePosture(a.postureInputsFrom(status, now, flags.patterns, flags.routine, failedReads, ev))
 }
 
 // derivePosture is posture.Derive with dispositionFor supplying flag verdicts.
